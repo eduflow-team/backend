@@ -1,0 +1,15 @@
+name: eduflow
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eduflow_backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
