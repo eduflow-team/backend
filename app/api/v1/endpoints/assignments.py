@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
-# --- STAGE 1 (학생) ---
+
 @router.get("/student/assignments/{id}/step1", summary="1단계 과제 상세")
 def get_step1_assignment(id: int):
     return {"status": "success", "data": {}}
@@ -18,7 +18,6 @@ def submit_step1_assignment(id: int):
     return {"status": "success", "data": {}}
 
 
-# --- STAGE 2 (학생) ---
 @router.get("/student/assignments/{id}/step2", summary="2단계 과제 상세")
 def get_step2_assignment(id: int):
     return {"status": "success", "data": {}}
@@ -34,7 +33,6 @@ def submit_step2_correction(id: int):
     return {"status": "success", "data": {}}
 
 
-# --- TEACHER (교사 전용) ---
 @router.post("/teacher/assignments/step1", summary="과제 생성 및 문서 벡터화")
 def create_step1_assignment():
     return {"status": "success", "data": {}}

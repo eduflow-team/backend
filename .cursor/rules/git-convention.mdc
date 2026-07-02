@@ -1,0 +1,44 @@
+---
+description: Git 브랜치·커밋·PR·코드리뷰 컨벤션 (CONTRIBUTING.md 요약)
+alwaysApply: true
+---
+
+# Git 컨벤션
+
+상세: [CONTRIBUTING.md](../../CONTRIBUTING.md)
+
+## 브랜치
+- `main`: 프로덕션 (직접 push 금지)
+- `develop`: 통합 기준 브랜치 — **모든 작업 브랜치는 여기서 분기**
+- 작업 브랜치: `feat/기능명`, `fix/버그명` (소문자, `#` 사용 금지)
+
+## 커밋 (Conventional Commits)
+```
+type: subject
+```
+- `type:` 뒤 **공백 1칸**, 영문 type은 소문자
+- 타입: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+- 예: `feat: document_chunks repository 추가`
+
+## PR
+- 제목: `[Feat] 작업 내용` / `[Fix] ...` / `[Chore] ...`
+- 본문 양식: `.cursor/rules/pull-request.mdc` / [`.github/pull_request_template.md`](../../.github/pull_request_template.md)
+- Squash and merge 기본
+- 200~400줄 권장, 셀프 리뷰 후 리뷰어 지정
+- Approve 1명 이상 필요
+- 이슈 연결 시 본문: `Closes #번호`
+
+## 코드 리뷰 (P-태그)
+| 태그 | 의미 |
+|------|------|
+| P1 | Must — 버그·기능 오류, 수정 필수 |
+| P2 | Should — 구조·가독성, 반영 권장 |
+| P3 | Comment — 질문·팁, 자율 판단 |
+
+## 충돌 해결
+작업 브랜치에서 `git pull origin develop` → 충돌 수정 → commit → push
+
+## AI 작업 시
+- 커밋·PR은 사용자가 요청할 때만 생성
+- `main`/`develop` 직접 push, force push 금지
+- 커밋 전 디버그 `print` 제거

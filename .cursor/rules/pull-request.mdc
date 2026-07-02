@@ -1,0 +1,56 @@
+---
+description: PR 본문 작성 양식 (.github/pull_request_template.md 요약)
+alwaysApply: true
+---
+
+# Pull Request 본문 양식
+
+원본 템플릿: [`.github/pull_request_template.md`](../../.github/pull_request_template.md)  
+GitHub PR 생성 시 자동 주입됨. AI가 PR 초안 작성 시 **아래 4개 섹션 순서·제목을 그대로** 따른다.
+
+## 필수 섹션
+
+```markdown
+## 📌 개요
+-
+
+## 📝 주요 변경 사항
+-
+
+## ✔️ 다른 팀원 참고사항
+-
+
+## 🔗 관련 이슈
+- Closes #
+```
+
+## 섹션별 작성 가이드
+
+### 📌 개요
+- 1~3문장으로 **무엇을·왜** 했는지
+- 예: "ERD 기준 PostgreSQL 스키마 + Alembic + Repository 레이어 구축"
+
+### 📝 주요 변경 사항
+- 변경 파일/모듈 단위 bullet
+- 테스트 결과 표 포함 가능 (`alembic upgrade head`, `/health/db` 등)
+- 스크린샷 섹션은 팀에서 사용 안 함 → `주요 변경 사항`에 통합
+
+### ✔️ 다른 팀원 참고사항
+- pull 후 실행 명령 (`docker compose`, `alembic upgrade head`)
+- 담당자별 메모 (`@류동원`, `@임정원` 등)
+- 이번 PR 범위外 후속 작업
+
+### 🔗 관련 이슈
+- 이슈 있으면: `Closes #번호`
+- 없으면: `- (없음)` 또는 섹션만 유지
+
+## PR 제목 (본문과 별도)
+
+`[Feat] 작업 내용` / `[Fix] ...` / `[Chore] ...`  
+상세: `git-convention.mdc`
+
+## AI 작업 시
+- 사용자가 PR 작성 요청할 때만 초안 작성
+- `gh pr create` / push는 사용자 요청 시에만
+- 템플릿 4섹션 제목·이모지 변경 금지
+- 한국어 작성, 기술 용어(Repository, Alembic 등)는 영문 유지 OK

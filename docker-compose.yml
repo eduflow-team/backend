@@ -1,5 +1,23 @@
 name: eduflow
 services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: eduflow_db
+    environment:
+      POSTGRES_USER: eduflow
+      POSTGRES_PASSWORD: eduflow
+      POSTGRES_DB: eduflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eduflow -d eduflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -10,6 +28,15 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql+asyncpg://eduflow:eduflow@db:5432/eduflow
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  pgdata:
