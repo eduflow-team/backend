@@ -20,18 +20,24 @@ app/
 
 ## API
 - prefix: `/api/v1`
-- 응답: `{"status": "success", "data": ...}` (기존 엔드포인트 패턴 유지)
-- `response_model`, `summary`, `tags` 지정 → OpenAPI `/docs` 자동 반영
+- 응답(성공): Envelope(`{"status": ..., "data": ...}` 등) 없이 **순수 리소스(데이터)를 그대로 반환**. HTTP 상태 코드로 성공/실패 의미 전달 (`status_code=200/201` 등)
+- 응답(에러): FastAPI 표준 포맷 `{"detail": "에러 메시지"}` — 도메인 예외(`app/core/exceptions.py`)를 정의하고 `app/core/error_handlers.py`의 전역 핸들러가 변환
+- `response_model`, `summary`, `tags`, `status_code` 지정 → OpenAPI `/docs` 자동 반영
 - DB 세션: `Depends(get_db)` 주입
 
 ## 예시
 ```python
-@router.get("/health/db", summary="DB 연결 확인", tags=["Health"])
-async def health_db(db: AsyncSession = Depends(get_db)):
-    await db.execute(text("SELECT 1"))
-    return {"status": "success", "data": {"db": "ok"}}
+class ClassListResponse(BaseModel):
+    classes: list[ClassItem]
+
+
+@router.get("/classes", summary="학급 목록 조회", response_model=ClassListResponse)
+async def get_classes(db: AsyncSession = Depends(get_db)) -> ClassListResponse:
+    classes = await ClassService(db).list_classes()
+    return ClassListResponse(classes=[...])
 ```
 
 ## 금지
 - 라우터에 raw SQL·복잡한 비즈니스 로직
+- 성공 응답에 `status`/`message`/`data` 같은 래퍼(envelope) 씌우기
 - 디버그 `print` (커밋 전 제거)
