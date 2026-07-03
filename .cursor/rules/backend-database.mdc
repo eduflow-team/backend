@@ -1,0 +1,30 @@
+---
+description: PostgreSQL, pgvector, Alembic, Repository 규칙
+globs: app/{models,db,repositories}/**/*,alembic/**/*
+alwaysApply: false
+---
+
+# Database
+
+## ERD 기준 (ERD-1-revised.sql)
+- PostgreSQL 16 + `CREATE EXTENSION vector`
+- `document_chunks.embedding`: `vector(768)` (모델 확정 후 차원 조정)
+- `submissions` = 최종 제출 (`is_final`) → `evaluations` 대상
+- `stage1_attempts`, `stage2_*` = 중간 로그, `submission_id` FK (nullable)
+- `student_assignment_status`: UNIQUE (`user_id`, `assignment_id`)
+
+## Alembic
+- 스키마 변경은 migration 필수, 모델만 수정하지 않기
+- `users` ↔ `classes` 순환 FK: CREATE 후 ALTER로 추가
+
+## Repository
+- API/Service → Repository → Model (레이어 분리)
+- pgvector 검색: cosine distance (`<=>`) in ChunkRepository
+
+## 네이밍
+- 테이블·컬럼: snake_case 영문
+- PK: `{table_singular}_id` (예: `user_id`, `chunk_id`)
+
+## DataGrip 검증
+- `alembic upgrade head` 후 테이블·FK·vector 컬럼 확인
+- 테스트 insert로 row 저장 확인

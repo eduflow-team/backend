@@ -1,0 +1,26 @@
+---
+description: EduFlow 프로젝트 개요 및 팀 협업 규칙
+alwaysApply: true
+---
+
+# EduFlow Backend
+
+중·고등학생 AI 리터러시 교육 플랫폼. FastAPI + PostgreSQL + pgvector.
+
+## 스택
+- FastAPI, SQLAlchemy 2.0 (async), Alembic, asyncpg, pgvector
+- API 문서: OpenAPI (`/docs`, `/openapi.json`)
+- Docker: `pgvector/pgvector:pg16`
+
+## Git
+- 상세 규칙: `.cursor/rules/git-convention.mdc` / [CONTRIBUTING.md](../../CONTRIBUTING.md)
+
+## 담당 분리
+- **DB/RAG/평가/Dashboard 데이터**: documents, document_chunks, evaluations, submissions, stage*_*, repositories
+- **Auth/API**: users, refresh_tokens, JWT, LangFlow 채팅 API → 류동원
+- **AI/배포**: LangFlow workflow, 임베딩 모델 → 임정원
+
+## 원칙
+- 최소 diff, 기존 코드 스타일 따르기
+- ERD(Alembic)가 DB 기준, ERDCloud는 참고용
+- `.env`, 시크릿 커밋 금지
