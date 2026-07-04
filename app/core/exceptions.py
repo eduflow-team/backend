@@ -79,3 +79,10 @@ class InvalidRefreshTokenError(DomainException):
 
     status_code = status.HTTP_401_UNAUTHORIZED
     default_message = "Refresh Token이 만료되었거나 유효하지 않습니다. 다시 로그인해 주세요."
+
+
+class InvalidAccessTokenError(DomainException):
+    """GET /auth/me 전용: Access Token이 없거나 서명이 유효하지 않거나 만료됐을 때 발생 (401)."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    default_message = "인증 토큰(Access Token)이 누락되었거나 만료되었습니다."

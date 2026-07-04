@@ -119,6 +119,18 @@ class RefreshResponse(BaseModel):
     expires_in: int
 
 
+class MeResponse(BaseModel):
+    """GET /auth/me 성공 응답.
+
+    소셜 전용 가입자는 email/name이 없을 수 있어 Optional로 둔다.
+    """
+
+    user_id: int
+    name: str | None
+    email: str | None
+    role: Literal["STUDENT", "TEACHER"]
+
+
 class ClassItem(BaseModel):
     class_id: int
     grade: int | None

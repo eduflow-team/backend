@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import (
     EmailAlreadyExistsError,
+    InvalidAccessTokenError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
     InvalidSignupCodeError,
@@ -149,6 +150,14 @@ class AuthService:
 
         await self.refresh_token_repository.revoke(token)
         return await self._issue_tokens(user)
+
+    async def get_me(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            # 토큰 발급 이후 탈퇴(soft delete)된 사용자 등 → 인증 실패로 취급한다.
+            raise InvalidAccessTokenError()
+
+        return user
 
     async def signup(self, payload: SignupRequest) -> User:
         if payload.role == "TEACHER":
