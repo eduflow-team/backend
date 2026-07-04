@@ -1,7 +1,11 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user_id, get_current_user_id_for_me
+from app.api.deps import (
+    get_current_user_id,
+    get_current_user_id_for_leave,
+    get_current_user_id_for_me,
+)
 from app.db.session import get_db
 from app.schemas.auth import (
     ClassItem,
@@ -175,9 +179,21 @@ async def get_me(
     return MeResponse(user_id=user.user_id, name=user.name, email=user.email, role=user.role)
 
 
-@router.delete("/leave", summary="회원 탈퇴")
-def leave():
-    return {"status": "success", "data": {}}
+@router.delete(
+    "/leave",
+    summary="회원 탈퇴",
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def leave(
+    user_id: int = Depends(get_current_user_id_for_leave),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await AuthService(db).leave(user_id)
+    return {}
 
 
 @router.post(

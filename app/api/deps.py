@@ -4,7 +4,12 @@ import jwt
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.exceptions import DomainException, InvalidAccessTokenError, InvalidTokenError
+from app.core.exceptions import (
+    DomainException,
+    InvalidAccessTokenError,
+    InvalidLeaveTokenError,
+    InvalidTokenError,
+)
 from app.core.security import decode_token
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -48,3 +53,11 @@ def get_current_user_id_for_me(
     """`GET /auth/me` 전용 (예외: `InvalidAccessTokenError`)."""
 
     return _decode_access_token(credentials, InvalidAccessTokenError)
+
+
+def get_current_user_id_for_leave(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> int:
+    """`DELETE /auth/leave` 전용 (예외: `InvalidLeaveTokenError`)."""
+
+    return _decode_access_token(credentials, InvalidLeaveTokenError)
