@@ -51,3 +51,13 @@ def create_refresh_token(user_id: int) -> tuple[str, datetime]:
     return _create_token(
         user_id, "refresh", timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
     )
+
+
+def decode_token(token: str) -> dict:
+    """JWT를 디코딩해 payload를 반환한다.
+
+    서명 불일치·만료 등 검증 실패 시 `jwt.PyJWTError`를 그대로 전파하며,
+    HTTP 응답으로의 변환은 호출부(API 의존성)에서 담당한다.
+    """
+
+    return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])

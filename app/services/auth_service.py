@@ -9,6 +9,7 @@ from app.core.exceptions import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
     InvalidSignupCodeError,
+    InvalidTokenError,
     SocialAccountAlreadyExistsError,
     SocialAccountNotFoundError,
 )
@@ -106,6 +107,16 @@ class AuthService:
             refresh_token=refresh_token,
             expires_in=expires_in,
         )
+
+    async def logout(self, user_id: int, refresh_token: str) -> None:
+        token = await self.refresh_token_repository.get_by_token(refresh_token)
+        if token is None or token.user_id != user_id:
+            # refresh_token 자체가 없거나(이미 무효화 포함) 본인 소유가 아니면
+            # Access Token 검증 실패와 동일하게 취급해 존재 여부를 노출하지 않는다.
+            raise InvalidTokenError()
+
+        await self.refresh_token_repository.revoke(token)
+        await self.session.commit()
 
     async def signup(self, payload: SignupRequest) -> User:
         if payload.role == "TEACHER":

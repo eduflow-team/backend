@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user_id
 from app.db.session import get_db
 from app.schemas.auth import (
     ClassItem,
@@ -8,6 +9,7 @@ from app.schemas.auth import (
     ErrorDetail,
     LoginRequest,
     LoginResponse,
+    LogoutRequest,
     SignupRequest,
     SignupResponse,
     SocialLoginRequest,
@@ -133,9 +135,23 @@ async def social_signup(
     )
 
 
-@router.post("/logout", summary="로그아웃")
-def logout():
-    return {"status": "success", "data": {}}
+@router.post(
+    "/logout",
+    summary="로그아웃",
+    status_code=status.HTTP_200_OK,
+    responses={
+        400: {"model": ErrorDetail, "description": "필수 파라미터(refresh_token) 누락 또는 형식 오류"},
+        401: {"model": ErrorDetail, "description": "유효하지 않거나 이미 만료된 토큰"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def logout(
+    payload: LogoutRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await AuthService(db).logout(user_id, payload.refresh_token)
+    return {}
 
 
 @router.get("/me", summary="내 정보 조회")

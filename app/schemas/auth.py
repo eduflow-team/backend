@@ -95,6 +95,12 @@ class SocialSignupRequest(BaseModel):
     signup_code: str | None = None
 
 
+class LogoutRequest(BaseModel):
+    """POST /auth/logout 요청 바디."""
+
+    refresh_token: str = Field(..., min_length=1)
+
+
 class ClassItem(BaseModel):
     class_id: int
     grade: int | None

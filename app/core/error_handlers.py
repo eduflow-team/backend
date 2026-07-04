@@ -23,6 +23,8 @@ _FIELD_LABELS: dict[str, str] = {
 
 _SOCIAL_LOGIN_FIELDS = {"provider", "social_token"}
 
+_LOGOUT_REFRESH_TOKEN_MESSAGE = "필수 파라미터(refresh_token)가 누락되었거나 형식이 올바르지 않습니다."
+
 
 def _error_response(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": message})
@@ -32,6 +34,7 @@ def _build_validation_message(request: Request, exc: RequestValidationError) -> 
     """Pydantic 검증 에러 목록에서 명세서 포맷에 맞는 메시지 한 개를 구성한다."""
 
     is_social_signup = request.url.path.endswith("/signup") and "/social/" in request.url.path
+    is_logout = request.url.path.endswith("/logout")
 
     for error in exc.errors():
         loc = error.get("loc", ())
@@ -40,6 +43,9 @@ def _build_validation_message(request: Request, exc: RequestValidationError) -> 
 
         if field == "email":
             return "유효하지 않은 이메일 형식입니다."
+
+        if field == "refresh_token" and is_logout:
+            return _LOGOUT_REFRESH_TOKEN_MESSAGE
 
         if field in _SOCIAL_LOGIN_FIELDS:
             if is_social_signup:
