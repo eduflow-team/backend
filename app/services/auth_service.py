@@ -8,9 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import (
     EmailAlreadyExistsError,
-    InvalidAccessTokenError,
     InvalidCredentialsError,
-    InvalidLeaveTokenError,
     InvalidRefreshTokenError,
     InvalidSignupCodeError,
     InvalidTokenError,
@@ -156,7 +154,7 @@ class AuthService:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
             # 토큰 발급 이후 탈퇴(soft delete)된 사용자 등 → 인증 실패로 취급한다.
-            raise InvalidAccessTokenError()
+            raise InvalidTokenError()
 
         return user
 
@@ -165,7 +163,7 @@ class AuthService:
 
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
-            raise InvalidLeaveTokenError()
+            raise InvalidTokenError()
 
         user.email = None
         user.name = None

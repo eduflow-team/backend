@@ -1,11 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import (
-    get_current_user_id,
-    get_current_user_id_for_leave,
-    get_current_user_id_for_me,
-)
+from app.api.deps import get_current_user_id
 from app.db.session import get_db
 from app.schemas.auth import (
     ClassItem,
@@ -148,7 +144,7 @@ async def social_signup(
     status_code=status.HTTP_200_OK,
     responses={
         400: {"model": ErrorDetail, "description": "필수 파라미터(refresh_token) 누락 또는 형식 오류"},
-        401: {"model": ErrorDetail, "description": "유효하지 않거나 이미 만료된 토큰"},
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
         500: {"model": ErrorDetail, "description": "서버 내부 오류"},
     },
 )
@@ -167,12 +163,12 @@ async def logout(
     status_code=status.HTTP_200_OK,
     response_model=MeResponse,
     responses={
-        401: {"model": ErrorDetail, "description": "인증 토큰(Access Token) 누락 또는 만료"},
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
         500: {"model": ErrorDetail, "description": "서버 내부 오류"},
     },
 )
 async def get_me(
-    user_id: int = Depends(get_current_user_id_for_me),
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> MeResponse:
     user = await AuthService(db).get_me(user_id)
@@ -189,7 +185,7 @@ async def get_me(
     },
 )
 async def leave(
-    user_id: int = Depends(get_current_user_id_for_leave),
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await AuthService(db).leave(user_id)
