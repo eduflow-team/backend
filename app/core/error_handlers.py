@@ -21,13 +21,17 @@ _FIELD_LABELS: dict[str, str] = {
     "role": "role",
 }
 
+_SOCIAL_LOGIN_FIELDS = {"provider", "social_token"}
+
 
 def _error_response(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": message})
 
 
-def _build_validation_message(exc: RequestValidationError) -> str:
+def _build_validation_message(request: Request, exc: RequestValidationError) -> str:
     """Pydantic 검증 에러 목록에서 명세서 포맷에 맞는 메시지 한 개를 구성한다."""
+
+    is_social_signup = request.url.path.endswith("/signup") and "/social/" in request.url.path
 
     for error in exc.errors():
         loc = error.get("loc", ())
@@ -36,6 +40,11 @@ def _build_validation_message(exc: RequestValidationError) -> str:
 
         if field == "email":
             return "유효하지 않은 이메일 형식입니다."
+
+        if field in _SOCIAL_LOGIN_FIELDS:
+            if is_social_signup:
+                return "필수 필드가 누락되었거나 지원하지 않는 소셜 공급자입니다."
+            return "잘못된 요청 파라미터 또는 지원하지 않는 소셜 공급자입니다."
 
         if error_type == "missing":
             label = _FIELD_LABELS.get(field, field or "필드")
@@ -52,7 +61,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        message = _build_validation_message(exc)
+        message = _build_validation_message(request, exc)
         return _error_response(status.HTTP_400_BAD_REQUEST, message)
 
     @app.exception_handler(DomainException)
