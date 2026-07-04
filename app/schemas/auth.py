@@ -101,6 +101,24 @@ class LogoutRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1)
 
 
+class RefreshRequest(BaseModel):
+    """POST /auth/refresh 요청 바디."""
+
+    refresh_token: str = Field(..., min_length=1)
+
+
+class RefreshResponse(BaseModel):
+    """POST /auth/refresh 성공 응답.
+
+    RTR(Refresh Token Rotation) 방식을 적용해 access_token과 함께
+    refresh_token도 매번 새로 발급한다.
+    """
+
+    access_token: str
+    refresh_token: str
+    expires_in: int
+
+
 class ClassItem(BaseModel):
     class_id: int
     grade: int | None

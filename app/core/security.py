@@ -1,5 +1,6 @@
 """비밀번호 해시 및 JWT 토큰 발급 관련 유틸리티."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -32,6 +33,10 @@ def _create_token(
         "type": token_type,
         "exp": expires_at,
         "iat": datetime.now(UTC),
+        # exp/iat는 초 단위로 잘려 인코딩되므로, jti가 없으면 같은 사용자에게 같은
+        # 종류의 토큰을 1초 내 연속 발급할 때 완전히 동일한 문자열이 나올 수 있다
+        # (refresh_tokens.refresh_token 중복 → RTR 조회 시 MultipleResultsFound).
+        "jti": uuid.uuid4().hex,
     }
     token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return token, expires_at

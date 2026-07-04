@@ -10,6 +10,8 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     LogoutRequest,
+    RefreshRequest,
+    RefreshResponse,
     SignupRequest,
     SignupResponse,
     SocialLoginRequest,
@@ -164,6 +166,24 @@ def leave():
     return {"status": "success", "data": {}}
 
 
-@router.post("/refresh", summary="토큰 재발급")
-def refresh():
-    return {"status": "success", "data": {}}
+@router.post(
+    "/refresh",
+    summary="토큰 재발급",
+    status_code=status.HTTP_200_OK,
+    response_model=RefreshResponse,
+    responses={
+        400: {"model": ErrorDetail, "description": "refresh_token이 요청에 포함되지 않음"},
+        401: {
+            "model": ErrorDetail,
+            "description": "Refresh Token이 만료·조작되었거나 이미 사용된(RTR 위반) 토큰",
+        },
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> RefreshResponse:
+    tokens = await AuthService(db).refresh(payload.refresh_token)
+    return RefreshResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        expires_in=tokens.expires_in,
+    )

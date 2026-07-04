@@ -2,12 +2,14 @@
 
 from datetime import UTC, datetime
 
+import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
+    InvalidRefreshTokenError,
     InvalidSignupCodeError,
     InvalidTokenError,
     SocialAccountAlreadyExistsError,
@@ -16,6 +18,7 @@ from app.core.exceptions import (
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    decode_token,
     hash_password,
     verify_password,
 )
@@ -117,6 +120,35 @@ class AuthService:
 
         await self.refresh_token_repository.revoke(token)
         await self.session.commit()
+
+    async def refresh(self, refresh_token: str) -> AuthTokens:
+        """RTR(Refresh Token Rotation) 방식으로 Access/Refresh Token을 재발급한다."""
+
+        try:
+            payload = decode_token(refresh_token)
+        except jwt.PyJWTError as exc:
+            raise InvalidRefreshTokenError() from exc
+
+        if payload.get("type") != "refresh":
+            raise InvalidRefreshTokenError()
+
+        token = await self.refresh_token_repository.get_by_token_any_status(refresh_token)
+        if token is None:
+            raise InvalidRefreshTokenError()
+
+        if token.is_revoked:
+            # 이미 회전(rotate)되어 폐기된 Refresh Token의 재사용 시도 → 탈취 의심,
+            # 해당 사용자의 모든 Refresh Token을 전면 무효화해 재로그인을 강제한다.
+            await self.refresh_token_repository.revoke_all_by_user(token.user_id)
+            await self.session.commit()
+            raise InvalidRefreshTokenError()
+
+        user = await self.user_repository.get_by_id(token.user_id)
+        if user is None:
+            raise InvalidRefreshTokenError()
+
+        await self.refresh_token_repository.revoke(token)
+        return await self._issue_tokens(user)
 
     async def signup(self, payload: SignupRequest) -> User:
         if payload.role == "TEACHER":
