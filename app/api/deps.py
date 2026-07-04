@@ -16,6 +16,7 @@ def get_current_user_id(
     """`Authorization: Bearer {access_token}` 헤더를 검증해 user_id를 반환한다.
 
     헤더 누락·서명 오류·만료는 모두 동일하게 401(`InvalidTokenError`)로 처리한다.
+    `/auth/logout`, `/auth/me`, `/auth/leave`가 공통으로 사용하는 의존성이다.
     """
 
     if credentials is None:

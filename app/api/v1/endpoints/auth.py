@@ -10,6 +10,7 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     LogoutRequest,
+    MeResponse,
     RefreshRequest,
     RefreshResponse,
     SignupRequest,
@@ -143,7 +144,7 @@ async def social_signup(
     status_code=status.HTTP_200_OK,
     responses={
         400: {"model": ErrorDetail, "description": "필수 파라미터(refresh_token) 누락 또는 형식 오류"},
-        401: {"model": ErrorDetail, "description": "유효하지 않거나 이미 만료된 토큰"},
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
         500: {"model": ErrorDetail, "description": "서버 내부 오류"},
     },
 )
@@ -156,14 +157,39 @@ async def logout(
     return {}
 
 
-@router.get("/me", summary="내 정보 조회")
-def get_me():
-    return {"status": "success", "data": {}}
+@router.get(
+    "/me",
+    summary="내 정보 조회",
+    status_code=status.HTTP_200_OK,
+    response_model=MeResponse,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def get_me(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    user = await AuthService(db).get_me(user_id)
+    return MeResponse(user_id=user.user_id, name=user.name, email=user.email, role=user.role)
 
 
-@router.delete("/leave", summary="회원 탈퇴")
-def leave():
-    return {"status": "success", "data": {}}
+@router.delete(
+    "/leave",
+    summary="회원 탈퇴",
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def leave(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await AuthService(db).leave(user_id)
+    return {}
 
 
 @router.post(

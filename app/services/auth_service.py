@@ -150,6 +150,32 @@ class AuthService:
         await self.refresh_token_repository.revoke(token)
         return await self._issue_tokens(user)
 
+    async def get_me(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            # 토큰 발급 이후 탈퇴(soft delete)된 사용자 등 → 인증 실패로 취급한다.
+            raise InvalidTokenError()
+
+        return user
+
+    async def leave(self, user_id: int) -> None:
+        """회원 탈퇴: soft delete와 함께 개인정보를 비식별화(마스킹)하고, 발급된 토큰을 모두 무효화한다."""
+
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            raise InvalidTokenError()
+
+        user.email = None
+        user.name = None
+        user.phone = None
+        user.password_hash = None
+        user.social_provider = None
+        user.social_id = None
+
+        await self.user_repository.soft_delete(user)
+        await self.refresh_token_repository.revoke_all_by_user(user_id)
+        await self.session.commit()
+
     async def signup(self, payload: SignupRequest) -> User:
         if payload.role == "TEACHER":
             self._validate_teacher_signup_code(payload.signup_code)

@@ -68,10 +68,14 @@ class SocialAccountAlreadyExistsError(DomainException):
 
 
 class InvalidTokenError(DomainException):
-    """Access/Refresh Token이 없거나 서명이 유효하지 않거나 이미 만료·무효화됐을 때 발생 (401)."""
+    """Access Token이 없거나 서명이 유효하지 않거나 만료됐을 때 발생 (401).
+
+    `/auth/logout`, `/auth/me`, `/auth/leave`가 공통으로 사용한다. (명세서상 문구가
+    엔드포인트마다 조금씩 달랐으나, 의미가 동일해 하나로 통일함.)
+    """
 
     status_code = status.HTTP_401_UNAUTHORIZED
-    default_message = "유효하지 않거나 이미 만료된 토큰입니다."
+    default_message = "인증 토큰이 유효하지 않거나 만료되었습니다."
 
 
 class InvalidRefreshTokenError(DomainException):
