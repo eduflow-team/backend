@@ -6,6 +6,8 @@ from app.schemas.auth import (
     ClassItem,
     ClassListResponse,
     ErrorDetail,
+    LoginRequest,
+    LoginResponse,
     SignupRequest,
     SignupResponse,
 )
@@ -49,9 +51,26 @@ async def get_classes(db: AsyncSession = Depends(get_db)) -> ClassListResponse:
     )
 
 
-@router.post("/login", summary="로그인")
-def login():
-    return {"status": "success", "data": {}}
+@router.post(
+    "/login",
+    summary="로그인",
+    status_code=status.HTTP_200_OK,
+    response_model=LoginResponse,
+    responses={
+        400: {"model": ErrorDetail, "description": "필수 필드 누락 또는 이메일 형식 오류"},
+        401: {"model": ErrorDetail, "description": "이메일 또는 비밀번호 불일치"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> LoginResponse:
+    tokens = await AuthService(db).login(payload)
+    return LoginResponse(
+        user_id=tokens.user.user_id,
+        role=tokens.user.role,
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        expires_in=tokens.expires_in,
+    )
 
 
 @router.post("/social/{provider}", summary="소셜 로그인")

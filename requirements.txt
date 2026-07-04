@@ -6,6 +6,7 @@ email-validator==2.3.0
 
 # Auth
 bcrypt==5.0.0
+pyjwt[crypto]==2.13.0
 
 # Database
 sqlalchemy[asyncio]==2.0.36

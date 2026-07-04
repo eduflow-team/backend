@@ -30,3 +30,10 @@ class EmailAlreadyExistsError(DomainException):
 
     status_code = status.HTTP_409_CONFLICT
     default_message = "이미 존재하는 이메일입니다."
+
+
+class InvalidCredentialsError(DomainException):
+    """가입되지 않은 이메일이거나 비밀번호가 일치하지 않을 때 발생 (401)."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    default_message = "이메일 또는 비밀번호가 일치하지 않습니다."

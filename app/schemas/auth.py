@@ -37,6 +37,30 @@ class SignupResponse(BaseModel):
         return value.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+class LoginRequest(BaseModel):
+    """POST /auth/login 요청 바디.
+
+    이메일 형식·필수 필드 누락 검증은 Pydantic이 라우터 진입 전 단계에서 수행하며,
+    검증 실패는 `RequestValidationError`로 전역 핸들러가 400으로 변환한다.
+    """
+
+    email: EmailStr
+    password: str = Field(..., min_length=1)
+
+
+class LoginResponse(BaseModel):
+    """POST /auth/login 성공 응답.
+
+    Envelope(status/message/data) 없이 인증 결과를 그대로 반환한다.
+    """
+
+    user_id: int
+    role: Literal["STUDENT", "TEACHER"]
+    access_token: str
+    refresh_token: str
+    expires_in: int
+
+
 class ClassItem(BaseModel):
     class_id: int
     grade: int | None
