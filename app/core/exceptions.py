@@ -58,3 +58,10 @@ class SocialAccountNotFoundError(DomainException):
 
     status_code = status.HTTP_404_NOT_FOUND
     default_message = "등록되지 않은 사용자입니다. 회원가입이 필요합니다."
+
+
+class SocialAccountAlreadyExistsError(DomainException):
+    """이미 연동된 소셜 계정(provider + social_id)으로 재가입을 시도할 때 발생 (409)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_message = "이미 가입된 소셜 계정입니다."

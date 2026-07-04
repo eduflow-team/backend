@@ -80,6 +80,21 @@ class SocialLoginRequest(BaseModel):
     social_token: str = Field(..., min_length=1)
 
 
+class SocialSignupRequest(BaseModel):
+    """POST /auth/social/{provider}/signup 요청 바디.
+
+    이메일/비밀번호 대신 소셜 토큰으로 계정을 생성한다. role 분기·signup_code 검증
+    규칙은 `/auth/signup`과 동일하게 적용된다.
+    """
+
+    social_token: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    phone: str = Field(..., min_length=1)
+    role: Literal["STUDENT", "TEACHER"]
+    class_id: int | None = None
+    signup_code: str | None = None
+
+
 class ClassItem(BaseModel):
     class_id: int
     grade: int | None

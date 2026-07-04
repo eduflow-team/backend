@@ -9,6 +9,7 @@ from app.core.exceptions import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
     InvalidSignupCodeError,
+    SocialAccountAlreadyExistsError,
     SocialAccountNotFoundError,
 )
 from app.core.security import (
@@ -19,7 +20,7 @@ from app.core.security import (
 )
 from app.models.user import RefreshToken, User
 from app.repositories.user import RefreshTokenRepository, UserRepository
-from app.schemas.auth import LoginRequest, SignupRequest, SocialProvider
+from app.schemas.auth import LoginRequest, SignupRequest, SocialProvider, SocialSignupRequest
 from app.services.social_auth_clients import get_social_auth_client
 
 
@@ -58,6 +59,30 @@ class AuthService:
             # 토큰 자체는 유효하므로, 연동된 계정이 없다는 사실을 그대로 알려
             # 프론트가 소셜 회원가입 화면으로 유도할 수 있게 한다.
             raise SocialAccountNotFoundError()
+
+        return await self._issue_tokens(user)
+
+    async def social_signup(self, provider: SocialProvider, payload: SocialSignupRequest) -> AuthTokens:
+        if payload.role == "TEACHER":
+            self._validate_teacher_signup_code(payload.signup_code)
+
+        client = get_social_auth_client(provider)
+        social_id = await client.get_social_id(payload.social_token)
+
+        existing_user = await self.user_repository.get_by_social_id(provider.value, social_id)
+        if existing_user is not None:
+            raise SocialAccountAlreadyExistsError()
+
+        user = User(
+            social_provider=provider.value,
+            social_id=social_id,
+            name=payload.name,
+            phone=payload.phone,
+            role=payload.role,
+            class_id=payload.class_id,
+        )
+        user = await self.user_repository.create(user)
+        await self.session.commit()
 
         return await self._issue_tokens(user)
 

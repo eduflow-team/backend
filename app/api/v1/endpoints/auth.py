@@ -12,6 +12,7 @@ from app.schemas.auth import (
     SignupResponse,
     SocialLoginRequest,
     SocialProvider,
+    SocialSignupRequest,
 )
 from app.services.auth_service import AuthService
 from app.services.class_service import ClassService
@@ -94,6 +95,35 @@ async def social_login(
     db: AsyncSession = Depends(get_db),
 ) -> LoginResponse:
     tokens = await AuthService(db).social_login(provider, payload.social_token)
+    return LoginResponse(
+        user_id=tokens.user.user_id,
+        role=tokens.user.role,
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        expires_in=tokens.expires_in,
+    )
+
+
+@router.post(
+    "/social/{provider}/signup",
+    summary="소셜 회원가입",
+    status_code=status.HTTP_201_CREATED,
+    response_model=LoginResponse,
+    responses={
+        400: {"model": ErrorDetail, "description": "필수 필드 누락 또는 지원하지 않는 provider"},
+        401: {"model": ErrorDetail, "description": "만료되었거나 유효하지 않은 소셜 토큰"},
+        403: {"model": ErrorDetail, "description": "교사 가입 인증 코드 오류"},
+        409: {"model": ErrorDetail, "description": "이미 가입된 소셜 계정"},
+        502: {"model": ErrorDetail, "description": "소셜 인증 서버와의 통신 실패"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def social_signup(
+    provider: SocialProvider,
+    payload: SocialSignupRequest,
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
+    tokens = await AuthService(db).social_signup(provider, payload)
     return LoginResponse(
         user_id=tokens.user.user_id,
         role=tokens.user.role,
