@@ -65,3 +65,17 @@ class SocialAccountAlreadyExistsError(DomainException):
 
     status_code = status.HTTP_409_CONFLICT
     default_message = "이미 가입된 소셜 계정입니다."
+
+
+class InvalidTokenError(DomainException):
+    """Access/Refresh Token이 없거나 서명이 유효하지 않거나 이미 만료·무효화됐을 때 발생 (401)."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    default_message = "유효하지 않거나 이미 만료된 토큰입니다."
+
+
+class InvalidRefreshTokenError(DomainException):
+    """POST /auth/refresh 전용: Refresh Token 서명 불일치·만료·재사용(RTR 위반) 시 발생 (401)."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    default_message = "Refresh Token이 만료되었거나 유효하지 않습니다. 다시 로그인해 주세요."

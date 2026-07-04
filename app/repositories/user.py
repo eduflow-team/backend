@@ -62,6 +62,17 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_token_any_status(self, refresh_token: str) -> RefreshToken | None:
+        """무효화 여부와 상관없이 토큰을 조회한다.
+
+        RTR(Refresh Token Rotation) 재사용 탐지를 위해, 이미 `revoke`된 토큰인지도
+        구분해야 하는 `/auth/refresh`에서만 사용한다.
+        """
+
+        stmt = select(RefreshToken).where(RefreshToken.refresh_token == refresh_token)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def revoke(self, token: RefreshToken) -> RefreshToken:
         token.is_revoked = True
         return await self.update(token)

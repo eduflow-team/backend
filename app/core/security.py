@@ -1,5 +1,6 @@
 """비밀번호 해시 및 JWT 토큰 발급 관련 유틸리티."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -32,6 +33,10 @@ def _create_token(
         "type": token_type,
         "exp": expires_at,
         "iat": datetime.now(UTC),
+        # exp/iat는 초 단위로 잘려 인코딩되므로, jti가 없으면 같은 사용자에게 같은
+        # 종류의 토큰을 1초 내 연속 발급할 때 완전히 동일한 문자열이 나올 수 있다
+        # (refresh_tokens.refresh_token 중복 → RTR 조회 시 MultipleResultsFound).
+        "jti": uuid.uuid4().hex,
     }
     token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return token, expires_at
@@ -51,3 +56,13 @@ def create_refresh_token(user_id: int) -> tuple[str, datetime]:
     return _create_token(
         user_id, "refresh", timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
     )
+
+
+def decode_token(token: str) -> dict:
+    """JWT를 디코딩해 payload를 반환한다.
+
+    서명 불일치·만료 등 검증 실패 시 `jwt.PyJWTError`를 그대로 전파하며,
+    HTTP 응답으로의 변환은 호출부(API 의존성)에서 담당한다.
+    """
+
+    return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])

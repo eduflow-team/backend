@@ -2,19 +2,23 @@
 
 from datetime import UTC, datetime
 
+import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
+    InvalidRefreshTokenError,
     InvalidSignupCodeError,
+    InvalidTokenError,
     SocialAccountAlreadyExistsError,
     SocialAccountNotFoundError,
 )
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    decode_token,
     hash_password,
     verify_password,
 )
@@ -106,6 +110,45 @@ class AuthService:
             refresh_token=refresh_token,
             expires_in=expires_in,
         )
+
+    async def logout(self, user_id: int, refresh_token: str) -> None:
+        token = await self.refresh_token_repository.get_by_token(refresh_token)
+        if token is None or token.user_id != user_id:
+            # refresh_token 자체가 없거나(이미 무효화 포함) 본인 소유가 아니면
+            # Access Token 검증 실패와 동일하게 취급해 존재 여부를 노출하지 않는다.
+            raise InvalidTokenError()
+
+        await self.refresh_token_repository.revoke(token)
+        await self.session.commit()
+
+    async def refresh(self, refresh_token: str) -> AuthTokens:
+        """RTR(Refresh Token Rotation) 방식으로 Access/Refresh Token을 재발급한다."""
+
+        try:
+            payload = decode_token(refresh_token)
+        except jwt.PyJWTError as exc:
+            raise InvalidRefreshTokenError() from exc
+
+        if payload.get("type") != "refresh":
+            raise InvalidRefreshTokenError()
+
+        token = await self.refresh_token_repository.get_by_token_any_status(refresh_token)
+        if token is None:
+            raise InvalidRefreshTokenError()
+
+        if token.is_revoked:
+            # 이미 회전(rotate)되어 폐기된 Refresh Token의 재사용 시도 → 탈취 의심,
+            # 해당 사용자의 모든 Refresh Token을 전면 무효화해 재로그인을 강제한다.
+            await self.refresh_token_repository.revoke_all_by_user(token.user_id)
+            await self.session.commit()
+            raise InvalidRefreshTokenError()
+
+        user = await self.user_repository.get_by_id(token.user_id)
+        if user is None:
+            raise InvalidRefreshTokenError()
+
+        await self.refresh_token_repository.revoke(token)
+        return await self._issue_tokens(user)
 
     async def signup(self, payload: SignupRequest) -> User:
         if payload.role == "TEACHER":
