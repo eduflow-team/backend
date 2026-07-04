@@ -1,6 +1,7 @@
 """회원가입 / 학급 목록 조회 API의 Pydantic 요청·응답 스키마."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_serializer
@@ -59,6 +60,24 @@ class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
     expires_in: int
+
+
+class SocialProvider(str, Enum):
+    """지원하는 소셜 로그인 제공자.
+
+    경로 파라미터(`provider`) 타입으로 사용되어, 목록에 없는 값은 FastAPI가
+    라우터 진입 전 `RequestValidationError`로 자동 차단한다 (400으로 변환됨).
+    """
+
+    KAKAO = "kakao"
+    GOOGLE = "google"
+    APPLE = "apple"
+
+
+class SocialLoginRequest(BaseModel):
+    """POST /auth/social/{provider} 요청 바디."""
+
+    social_token: str = Field(..., min_length=1)
 
 
 class ClassItem(BaseModel):

@@ -21,6 +21,8 @@ _FIELD_LABELS: dict[str, str] = {
     "role": "role",
 }
 
+_SOCIAL_LOGIN_FIELDS = {"provider", "social_token"}
+
 
 def _error_response(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": message})
@@ -36,6 +38,9 @@ def _build_validation_message(exc: RequestValidationError) -> str:
 
         if field == "email":
             return "유효하지 않은 이메일 형식입니다."
+
+        if field in _SOCIAL_LOGIN_FIELDS:
+            return "잘못된 요청 파라미터 또는 지원하지 않는 소셜 공급자입니다."
 
         if error_type == "missing":
             label = _FIELD_LABELS.get(field, field or "필드")

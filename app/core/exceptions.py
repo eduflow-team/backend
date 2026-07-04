@@ -37,3 +37,24 @@ class InvalidCredentialsError(DomainException):
 
     status_code = status.HTTP_401_UNAUTHORIZED
     default_message = "이메일 또는 비밀번호가 일치하지 않습니다."
+
+
+class InvalidSocialTokenError(DomainException):
+    """소셜 토큰이 만료됐거나 위조되어 검증에 실패했을 때 발생 (401)."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    default_message = "만료되었거나 유효하지 않은 소셜 토큰입니다."
+
+
+class SocialAuthServiceUnavailableError(DomainException):
+    """소셜 인증 서버(카카오/구글/애플)와의 통신에 실패했을 때 발생 (502)."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    default_message = "소셜 인증 서버와의 통신에 실패했습니다."
+
+
+class SocialAccountNotFoundError(DomainException):
+    """소셜 토큰은 유효하나, 연동된 계정이 없을 때 발생 (404). 회원가입 유도용."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "등록되지 않은 사용자입니다. 회원가입이 필요합니다."
