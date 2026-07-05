@@ -6,11 +6,17 @@ from app.core.exceptions import DashboardAccessForbiddenError, InvalidTokenError
 from app.models.assignment import Assignment
 from app.models.enums import AttendanceStatus, ProgressStatus
 from app.models.student_status import StudentAssignmentStatus
+from app.models.user import User
 from app.repositories.assignment import AssignmentRepository
 from app.repositories.attendance import AttendanceRepository
 from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.user import UserRepository
-from app.schemas.dashboard import StageSummaryItem, StudentDashboardSummaryResponse
+from app.schemas.dashboard import (
+    AssignmentSummaryItem,
+    StageSummaryItem,
+    StudentAssignmentListResponse,
+    StudentDashboardSummaryResponse,
+)
 
 _TOTAL_STAGE_COUNT = 4
 _KNOWN_PROGRESS_STATUSES = {s.value for s in ProgressStatus}
@@ -24,13 +30,7 @@ class DashboardService:
         self.attendance_repository = AttendanceRepository(session)
 
     async def get_student_summary(self, user_id: int) -> StudentDashboardSummaryResponse:
-        user = await self.user_repository.get_by_id(user_id)
-        if user is None:
-            # 토큰 발급 이후 탈퇴(soft delete)된 사용자 등 → 인증 실패로 취급한다.
-            raise InvalidTokenError()
-
-        if user.role != "STUDENT":
-            raise DashboardAccessForbiddenError()
+        user = await self._get_authorized_student(user_id)
 
         statuses = await self.student_status_repository.list_by_user(user_id)
         status_by_assignment_id = {s.assignment_id: s for s in statuses}
@@ -57,6 +57,35 @@ class DashboardService:
             attendance_rate=attendance_rate,
             stage_summary=stage_summary,
         )
+
+    async def get_student_assignments(self, user_id: int) -> StudentAssignmentListResponse:
+        user = await self._get_authorized_student(user_id)
+
+        assignments: list[Assignment] = []
+        if user.class_id is not None:
+            assignments = await self.assignment_repository.list_by_class(user.class_id)
+
+        statuses = await self.student_status_repository.list_by_user(user_id)
+        status_by_assignment_id = {s.assignment_id: s for s in statuses}
+
+        items = [
+            self._build_assignment_item(
+                assignment, status_by_assignment_id.get(assignment.assignment_id)
+            )
+            for assignment in assignments
+        ]
+        return StudentAssignmentListResponse(assignments=items)
+
+    async def _get_authorized_student(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            # 토큰 발급 이후 탈퇴(soft delete)된 사용자 등 → 인증 실패로 취급한다.
+            raise InvalidTokenError()
+
+        if user.role != "STUDENT":
+            raise DashboardAccessForbiddenError()
+
+        return user
 
     async def _get_latest_assignment_by_stage(
         self, class_id: int | None
@@ -85,33 +114,51 @@ class DashboardService:
         assignment: Assignment | None,
         status_by_assignment_id: dict[int, StudentAssignmentStatus],
     ) -> StageSummaryItem:
-        if assignment is None:
-            return StageSummaryItem(
-                stage=stage,
-                status=ProgressStatus.NOT_STARTED,
-                score=None,
-                remaining_attempts=None,
-            )
+        status_row = (
+            status_by_assignment_id.get(assignment.assignment_id) if assignment else None
+        )
+        progress_status, score = self._resolve_progress(status_row)
 
-        status_row = status_by_assignment_id.get(assignment.assignment_id)
+        return StageSummaryItem(
+            stage=stage,
+            status=progress_status,
+            score=score,
+            remaining_attempts=status_row.remaining_attempts if status_row else None,
+        )
+
+    def _build_assignment_item(
+        self,
+        assignment: Assignment,
+        status_row: StudentAssignmentStatus | None,
+    ) -> AssignmentSummaryItem:
+        progress_status, score = self._resolve_progress(status_row)
+
+        return AssignmentSummaryItem(
+            assignment_id=assignment.assignment_id,
+            title=assignment.title,
+            max_attempts=assignment.max_attempts,
+            score=score,
+            stage=assignment.stage,
+            due_date=assignment.due_at,
+            status=progress_status,
+        )
+
+    def _resolve_progress(
+        self, status_row: StudentAssignmentStatus | None
+    ) -> tuple[str, int | None]:
+        """진행 상태 기록을 안전하게 정규화해 (status, score)로 반환한다.
+
+        기록이 없거나 알 수 없는 값이면 `NOT_STARTED`/`None`으로 취급한다.
+        """
+
         if status_row is None:
-            return StageSummaryItem(
-                stage=stage,
-                status=ProgressStatus.NOT_STARTED,
-                score=None,
-                remaining_attempts=None,
-            )
+            return ProgressStatus.NOT_STARTED.value, None
 
         progress_status = (status_row.progress_status or ProgressStatus.NOT_STARTED.value).upper()
         if progress_status not in _KNOWN_PROGRESS_STATUSES:
             progress_status = ProgressStatus.NOT_STARTED.value
 
-        return StageSummaryItem(
-            stage=stage,
-            status=progress_status,
-            score=status_row.best_score,
-            remaining_attempts=status_row.remaining_attempts,
-        )
+        return progress_status, status_row.best_score
 
     async def _get_attendance_rate(self, user_id: int) -> float:
         records = await self.attendance_repository.list_by_user(user_id)

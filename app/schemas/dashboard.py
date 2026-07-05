@@ -1,6 +1,8 @@
 """학생 대시보드 API의 Pydantic 응답 스키마."""
 
-from pydantic import BaseModel
+from datetime import UTC, datetime
+
+from pydantic import BaseModel, field_serializer
 
 from app.models.enums import ProgressStatus
 
@@ -26,6 +28,30 @@ class StudentDashboardSummaryResponse(BaseModel):
     total_score: int
     attendance_rate: float
     stage_summary: list[StageSummaryItem]
+
+
+class AssignmentSummaryItem(BaseModel):
+    """GET /student/dashboard/assignments의 과제 항목."""
+
+    assignment_id: int
+    title: str | None
+    max_attempts: int | None
+    score: int | None
+    stage: int | None
+    due_date: datetime | None
+    status: ProgressStatus
+
+    @field_serializer("due_date")
+    def serialize_due_date(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class StudentAssignmentListResponse(BaseModel):
+    """GET /student/dashboard/assignments 성공 응답."""
+
+    assignments: list[AssignmentSummaryItem]
 
 
 class ErrorDetail(BaseModel):
