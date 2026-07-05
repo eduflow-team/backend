@@ -17,6 +17,15 @@ class UserRepository(BaseRepository[User]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_social_id(self, social_provider: str, social_id: str) -> User | None:
+        stmt = select(User).where(
+            User.social_provider == social_provider,
+            User.social_id == social_id,
+        )
+        stmt = self._apply_not_deleted(stmt)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def list_by_class_id(self, class_id: int) -> list[User]:
         stmt = (
             select(User)
@@ -50,6 +59,17 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
             RefreshToken.refresh_token == refresh_token,
             RefreshToken.is_revoked.is_(False),
         )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_token_any_status(self, refresh_token: str) -> RefreshToken | None:
+        """무효화 여부와 상관없이 토큰을 조회한다.
+
+        RTR(Refresh Token Rotation) 재사용 탐지를 위해, 이미 `revoke`된 토큰인지도
+        구분해야 하는 `/auth/refresh`에서만 사용한다.
+        """
+
+        stmt = select(RefreshToken).where(RefreshToken.refresh_token == refresh_token)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
