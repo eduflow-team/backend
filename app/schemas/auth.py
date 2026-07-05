@@ -122,11 +122,12 @@ class RefreshResponse(BaseModel):
 class MeResponse(BaseModel):
     """GET /auth/me 성공 응답.
 
-    소셜 전용 가입자는 email/name이 없을 수 있어 Optional로 둔다.
+    소셜 전용 가입자는 email이 없을 수 있어 Optional로 둔다. `name`은 가입
+    (일반/소셜 모두) 시 필수값이라 정상적으로 인증된 유저라면 항상 존재한다.
     """
 
     user_id: int
-    name: str | None
+    name: str
     email: str | None
     role: Literal["STUDENT", "TEACHER"]
 
