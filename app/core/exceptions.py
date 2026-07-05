@@ -86,7 +86,7 @@ class InvalidRefreshTokenError(DomainException):
 
 
 class DashboardAccessForbiddenError(DomainException):
-    """학생 전용 대시보드를 다른 role(예: 교사)로 접근하려 할 때 발생 (403)."""
+    """학생/교사 전용 대시보드를 반대 role로 접근하려 할 때 발생 (403)."""
 
     status_code = status.HTTP_403_FORBIDDEN
     default_message = "해당 대시보드에 접근할 권한이 없습니다."

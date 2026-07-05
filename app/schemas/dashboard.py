@@ -54,6 +54,28 @@ class StudentAssignmentListResponse(BaseModel):
     assignments: list[AssignmentSummaryItem]
 
 
+class StageSubmissionRateItem(BaseModel):
+    """GET /teacher/dashboard/summary의 단계별 제출률 통계 항목."""
+
+    stage: int
+    submitted_count: int
+    submission_rate: float
+    stage_average_score: float | None
+
+
+class TeacherDashboardSummaryResponse(BaseModel):
+    """GET /teacher/dashboard/summary 성공 응답.
+
+    담당 학급이 없거나 학생이 한 명도 없는 경우, 계산 불가능한 값들은
+    0/0.0으로 안전하게 반환한다 (학생 대시보드의 빈 상태 처리와 동일한 원칙).
+    """
+
+    total_students: int
+    unsubmitted_count: int
+    class_average_score: float
+    stage_submission_rates: list[StageSubmissionRateItem]
+
+
 class ErrorDetail(BaseModel):
     """에러 응답 포맷 (FastAPI 표준). 401 / 403 / 500 공통."""
 
