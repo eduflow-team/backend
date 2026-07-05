@@ -21,6 +21,7 @@ class StudentAssignmentStatus(Base):
         ForeignKey("assignments.assignment_id", name="fk_status_assignment"),
         nullable=False,
     )
+    # 값 목록: app.models.enums.ProgressStatus 참고
     progress_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     best_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     remaining_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)

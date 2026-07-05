@@ -1,15 +1,15 @@
 """학생 대시보드 API의 Pydantic 응답 스키마."""
 
-from typing import Literal
-
 from pydantic import BaseModel
+
+from app.models.enums import ProgressStatus
 
 
 class StageSummaryItem(BaseModel):
     """단계(stage)별 진행 상태 요약 항목."""
 
     stage: int
-    status: Literal["NOT_STARTED", "IN_PROGRESS", "COMPLETED"]
+    status: ProgressStatus
     score: int | None
     remaining_attempts: int | None
 

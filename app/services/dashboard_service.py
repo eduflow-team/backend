@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DashboardAccessForbiddenError, InvalidTokenError
 from app.models.assignment import Assignment
+from app.models.enums import AttendanceStatus, ProgressStatus
 from app.models.student_status import StudentAssignmentStatus
 from app.repositories.assignment import AssignmentRepository
 from app.repositories.attendance import AttendanceRepository
@@ -12,8 +13,7 @@ from app.repositories.user import UserRepository
 from app.schemas.dashboard import StageSummaryItem, StudentDashboardSummaryResponse
 
 _TOTAL_STAGE_COUNT = 4
-_ATTENDED_STATUS = "PRESENT"
-_KNOWN_PROGRESS_STATUSES = {"NOT_STARTED", "IN_PROGRESS", "COMPLETED"}
+_KNOWN_PROGRESS_STATUSES = {s.value for s in ProgressStatus}
 
 
 class DashboardService:
@@ -87,18 +87,24 @@ class DashboardService:
     ) -> StageSummaryItem:
         if assignment is None:
             return StageSummaryItem(
-                stage=stage, status="NOT_STARTED", score=None, remaining_attempts=None
+                stage=stage,
+                status=ProgressStatus.NOT_STARTED,
+                score=None,
+                remaining_attempts=None,
             )
 
         status_row = status_by_assignment_id.get(assignment.assignment_id)
         if status_row is None:
             return StageSummaryItem(
-                stage=stage, status="NOT_STARTED", score=None, remaining_attempts=None
+                stage=stage,
+                status=ProgressStatus.NOT_STARTED,
+                score=None,
+                remaining_attempts=None,
             )
 
-        progress_status = (status_row.progress_status or "NOT_STARTED").upper()
+        progress_status = (status_row.progress_status or ProgressStatus.NOT_STARTED.value).upper()
         if progress_status not in _KNOWN_PROGRESS_STATUSES:
-            progress_status = "NOT_STARTED"
+            progress_status = ProgressStatus.NOT_STARTED.value
 
         return StageSummaryItem(
             stage=stage,
@@ -113,6 +119,8 @@ class DashboardService:
             return 0.0
 
         attended_count = sum(
-            1 for r in records if r.status is not None and r.status.upper() == _ATTENDED_STATUS
+            1
+            for r in records
+            if r.status is not None and r.status.upper() == AttendanceStatus.PRESENT.value
         )
         return round(attended_count / len(records) * 100, 1)
