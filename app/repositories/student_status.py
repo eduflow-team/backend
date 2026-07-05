@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import ProgressStatus
 from app.models.student_status import StudentAssignmentStatus
 from app.repositories.base import BaseRepository
 
@@ -30,7 +31,7 @@ class StudentAssignmentStatusRepository(BaseRepository[StudentAssignmentStatus])
         user_id: int,
         assignment_id: int,
         *,
-        progress_status: str | None = "not_started",
+        progress_status: str | None = ProgressStatus.NOT_STARTED.value,
         remaining_attempts: int | None = None,
     ) -> StudentAssignmentStatus:
         status = await self.get_by_user_and_assignment(user_id, assignment_id)

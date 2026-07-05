@@ -83,3 +83,10 @@ class InvalidRefreshTokenError(DomainException):
 
     status_code = status.HTTP_401_UNAUTHORIZED
     default_message = "Refresh Token이 만료되었거나 유효하지 않습니다. 다시 로그인해 주세요."
+
+
+class DashboardAccessForbiddenError(DomainException):
+    """학생 전용 대시보드를 다른 role(예: 교사)로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 대시보드에 접근할 권한이 없습니다."
