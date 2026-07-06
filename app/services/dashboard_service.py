@@ -4,7 +4,12 @@ from collections import defaultdict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import DashboardAccessForbiddenError, InvalidTokenError
+from app.core.exceptions import (
+    DashboardAccessForbiddenError,
+    DomainException,
+    InvalidTokenError,
+    TeacherAssignmentAccessForbiddenError,
+)
 from app.models.assignment import Assignment
 from app.models.enums import AttendanceStatus, ProgressStatus
 from app.models.student_status import StudentAssignmentStatus
@@ -20,9 +25,11 @@ from app.schemas.dashboard import (
     StageSummaryItem,
     StudentAssignmentListResponse,
     StudentDashboardSummaryResponse,
+    TeacherAssignmentListResponse,
     TeacherDashboardSummaryResponse,
     TeacherUnsubmittedStudentsResponse,
     UnsubmittedStudentItem,
+    TeacherAssignmentItem,
 )
 
 _TOTAL_STAGE_COUNT = 4
@@ -147,6 +154,23 @@ class DashboardService:
 
         return TeacherUnsubmittedStudentsResponse(unsubmitted_students=unsubmitted_students)
 
+    async def get_teacher_assignments(self, user_id: int) -> TeacherAssignmentListResponse:
+        teacher = await self._get_authorized_user(
+            user_id, "TEACHER", forbidden_error=TeacherAssignmentAccessForbiddenError
+        )
+        assignments = await self.assignment_repository.list_by_teacher(teacher.user_id)
+
+        items = [
+            TeacherAssignmentItem(
+                assignment_id=assignment.assignment_id,
+                stage=assignment.stage,
+                title=assignment.title,
+                created_at=assignment.created_at,
+            )
+            for assignment in assignments
+        ]
+        return TeacherAssignmentListResponse(assignments=items)
+
     async def _load_teacher_dashboard_context(
         self, teacher_id: int
     ) -> tuple[list[User], dict[int, dict[int, StudentAssignmentStatus]], dict[int, Assignment]]:
@@ -171,14 +195,20 @@ class DashboardService:
     async def _get_authorized_teacher(self, user_id: int) -> User:
         return await self._get_authorized_user(user_id, "TEACHER")
 
-    async def _get_authorized_user(self, user_id: int, required_role: str) -> User:
+    async def _get_authorized_user(
+        self,
+        user_id: int,
+        required_role: str,
+        *,
+        forbidden_error: type[DomainException] | None = None,
+    ) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
             # 토큰 발급 이후 탈퇴(soft delete)된 사용자 등 → 인증 실패로 취급한다.
             raise InvalidTokenError()
 
         if user.role != required_role:
-            raise DashboardAccessForbiddenError()
+            raise (forbidden_error or DashboardAccessForbiddenError)()
 
         return user
 

@@ -90,3 +90,10 @@ class DashboardAccessForbiddenError(DomainException):
 
     status_code = status.HTTP_403_FORBIDDEN
     default_message = "해당 대시보드에 접근할 권한이 없습니다."
+
+
+class TeacherAssignmentAccessForbiddenError(DomainException):
+    """교사용 과제 목록/삭제 API를 학생 role로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 과제 목록에 접근할 권한이 없습니다."

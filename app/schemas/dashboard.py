@@ -94,6 +94,27 @@ class TeacherUnsubmittedStudentsResponse(BaseModel):
     unsubmitted_students: list[UnsubmittedStudentItem]
 
 
+class TeacherAssignmentItem(BaseModel):
+    """GET /teacher/dashboard/assignments의 과제 항목."""
+
+    assignment_id: int
+    stage: int | None
+    title: str | None
+    created_at: datetime | None
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class TeacherAssignmentListResponse(BaseModel):
+    """GET /teacher/dashboard/assignments 성공 응답."""
+
+    assignments: list[TeacherAssignmentItem]
+
+
 class ErrorDetail(BaseModel):
     """에러 응답 포맷 (FastAPI 표준). 401 / 403 / 500 공통."""
 
