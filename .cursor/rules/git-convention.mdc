@@ -23,7 +23,7 @@ type: subject
 ## PR
 - 제목: `[Feat] 작업 내용` / `[Fix] ...` / `[Chore] ...`
 - 본문 양식: `.cursor/rules/pull-request.mdc` / [`.github/pull_request_template.md`](../../.github/pull_request_template.md)
-- Squash and merge 기본
+- **머지 방식**: `develop` ← 작업 브랜치는 **Squash and merge** / `main` ← `develop`은 **일반 merge (Create a merge commit)**
 - 200~400줄 권장, 셀프 리뷰 후 리뷰어 지정
 - Approve 1명 이상 필요
 - 이슈 연결 시 본문: `Closes #번호`
