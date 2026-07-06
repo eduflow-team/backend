@@ -115,6 +115,10 @@ class TeacherAssignmentListResponse(BaseModel):
     assignments: list[TeacherAssignmentItem]
 
 
+class TeacherAssignmentDeleteResponse(BaseModel):
+    """DELETE /teacher/dashboard/assignments/{id} 성공 응답 (빈 객체)."""
+
+
 class ErrorDetail(BaseModel):
     """에러 응답 포맷 (FastAPI 표준). 401 / 403 / 500 공통."""
 

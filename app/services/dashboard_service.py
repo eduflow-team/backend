@@ -5,10 +5,12 @@ from collections import defaultdict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    AssignmentNotFoundError,
     DashboardAccessForbiddenError,
     DomainException,
     InvalidTokenError,
     TeacherAssignmentAccessForbiddenError,
+    TeacherAssignmentDeleteForbiddenError,
 )
 from app.models.assignment import Assignment
 from app.models.enums import AttendanceStatus, ProgressStatus
@@ -38,6 +40,7 @@ _KNOWN_PROGRESS_STATUSES = {s.value for s in ProgressStatus}
 
 class DashboardService:
     def __init__(self, session: AsyncSession) -> None:
+        self.session = session
         self.user_repository = UserRepository(session)
         self.class_repository = ClassRepository(session)
         self.assignment_repository = AssignmentRepository(session)
@@ -170,6 +173,20 @@ class DashboardService:
             for assignment in assignments
         ]
         return TeacherAssignmentListResponse(assignments=items)
+
+    async def delete_teacher_assignment(self, user_id: int, assignment_id: int) -> None:
+        teacher = await self._get_authorized_user(
+            user_id, "TEACHER", forbidden_error=TeacherAssignmentDeleteForbiddenError
+        )
+        assignment = await self.assignment_repository.get_by_id(assignment_id)
+        if assignment is None:
+            raise AssignmentNotFoundError()
+
+        if assignment.teacher_id != teacher.user_id:
+            raise TeacherAssignmentDeleteForbiddenError()
+
+        await self.assignment_repository.soft_delete(assignment)
+        await self.session.commit()
 
     async def _load_teacher_dashboard_context(
         self, teacher_id: int

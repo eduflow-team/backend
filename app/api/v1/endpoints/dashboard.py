@@ -7,6 +7,7 @@ from app.schemas.dashboard import (
     ErrorDetail,
     StudentAssignmentListResponse,
     StudentDashboardSummaryResponse,
+    TeacherAssignmentDeleteResponse,
     TeacherAssignmentListResponse,
     TeacherDashboardSummaryResponse,
     TeacherUnsubmittedStudentsResponse,
@@ -106,6 +107,22 @@ async def get_teacher_dashboard_assignments(
     return await DashboardService(db).get_teacher_assignments(user_id)
 
 
-@router.delete("/teacher/dashboard/assignments/{id}", summary="과제 삭제")
-def delete_teacher_assignment(id: int):
-    return {"status": "success", "data": {}}
+@router.delete(
+    "/teacher/dashboard/assignments/{id}",
+    summary="과제 삭제",
+    status_code=status.HTTP_200_OK,
+    response_model=TeacherAssignmentDeleteResponse,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        403: {"model": ErrorDetail, "description": "학생 계정 또는 소유권 없는 교사의 삭제 시도"},
+        404: {"model": ErrorDetail, "description": "존재하지 않거나 이미 삭제된 과제"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def delete_teacher_assignment(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> TeacherAssignmentDeleteResponse:
+    await DashboardService(db).delete_teacher_assignment(user_id, id)
+    return TeacherAssignmentDeleteResponse()
