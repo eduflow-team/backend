@@ -1,5 +1,8 @@
 """출석(Attendance) 관련 비즈니스 로직."""
 
+from collections import defaultdict
+from datetime import date
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AttendanceAccessForbiddenError, InvalidTokenError
@@ -7,14 +10,22 @@ from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus
 from app.models.user import User
 from app.repositories.attendance import AttendanceRepository
+from app.repositories.class_ import ClassRepository
 from app.repositories.user import UserRepository
-from app.schemas.attendance import AttendanceRecordItem, StudentAttendanceResponse
+from app.schemas.attendance import (
+    AttendanceRecordItem,
+    StudentAttendanceResponse,
+    TeacherAttendanceDateRecord,
+    TeacherAttendanceResponse,
+    TeacherAttendanceStudentItem,
+)
 from app.services.attendance_stats import compute_attendance_summary, normalize_attendance_status
 
 
 class AttendanceService:
     def __init__(self, session: AsyncSession) -> None:
         self.user_repository = UserRepository(session)
+        self.class_repository = ClassRepository(session)
         self.attendance_repository = AttendanceRepository(session)
 
     async def get_student_attendance(self, user_id: int) -> StudentAttendanceResponse:
@@ -34,12 +45,56 @@ class AttendanceService:
             attendance_records=items,
         )
 
+    async def get_teacher_attendance(
+        self,
+        user_id: int,
+        *,
+        from_date: date | None = None,
+        to_date: date | None = None,
+    ) -> TeacherAttendanceResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        classes = await self.class_repository.list_by_teacher(teacher.user_id)
+        class_ids = [c.class_id for c in classes]
+
+        students = await self.user_repository.list_by_class_ids(class_ids, role="STUDENT")
+        if not students:
+            return TeacherAttendanceResponse(attendance_dates=[], students=[])
+
+        records = await self.attendance_repository.list_by_class_ids(class_ids)
+        attendance_dates = self._build_attendance_dates(records, from_date=from_date, to_date=to_date)
+        records_by_user_date = self._group_records_by_user_date(records)
+
+        student_items = [
+            self._build_teacher_student_item(
+                student,
+                records,
+                attendance_dates,
+                records_by_user_date.get(student.user_id, {}),
+            )
+            for student in students
+        ]
+
+        return TeacherAttendanceResponse(
+            attendance_dates=attendance_dates,
+            students=student_items,
+        )
+
     async def _get_authorized_student(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
             raise InvalidTokenError()
 
         if user.role != "STUDENT":
+            raise AttendanceAccessForbiddenError()
+
+        return user
+
+    async def _get_authorized_teacher(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            raise InvalidTokenError()
+
+        if user.role != "TEACHER":
             raise AttendanceAccessForbiddenError()
 
         return user
@@ -54,4 +109,89 @@ class AttendanceService:
             date=record.attendance_date,
             status=AttendanceStatus(status),
             note=record.note or "",
+        )
+
+    def _build_attendance_dates(
+        self,
+        records: list[AttendanceRecord],
+        *,
+        from_date: date | None,
+        to_date: date | None,
+    ) -> list[date]:
+        dates = {
+            record.attendance_date
+            for record in records
+            if record.attendance_date is not None
+        }
+        dates.add(date.today())
+
+        attendance_dates = sorted(dates)
+        if from_date is not None:
+            attendance_dates = [d for d in attendance_dates if d >= from_date]
+        if to_date is not None:
+            attendance_dates = [d for d in attendance_dates if d <= to_date]
+        return attendance_dates
+
+    def _group_records_by_user_date(
+        self,
+        records: list[AttendanceRecord],
+    ) -> dict[int, dict[date, AttendanceRecord]]:
+        grouped: dict[int, dict[date, AttendanceRecord]] = defaultdict(dict)
+        for record in records:
+            if record.attendance_date is None:
+                continue
+            grouped[record.user_id][record.attendance_date] = record
+        return grouped
+
+    def _build_teacher_student_item(
+        self,
+        student: User,
+        all_records: list[AttendanceRecord],
+        attendance_dates: list[date],
+        records_by_date: dict[date, AttendanceRecord],
+    ) -> TeacherAttendanceStudentItem:
+        student_records = [record for record in all_records if record.user_id == student.user_id]
+        attendance_rate, _, _, _ = compute_attendance_summary(student_records)
+        today = date.today()
+
+        date_records = [
+            self._build_teacher_date_record(attendance_date, records_by_date, today)
+            for attendance_date in attendance_dates
+        ]
+
+        return TeacherAttendanceStudentItem(
+            student_id=student.user_id,
+            student_name=student.name or "",
+            attendance_rate=attendance_rate,
+            records=date_records,
+        )
+
+    def _build_teacher_date_record(
+        self,
+        attendance_date: date,
+        records_by_date: dict[date, AttendanceRecord],
+        today: date,
+    ) -> TeacherAttendanceDateRecord:
+        record = records_by_date.get(attendance_date)
+        if record is not None:
+            status = normalize_attendance_status(record.status)
+            if status is None:
+                status = AttendanceStatus.PENDING.value
+            return TeacherAttendanceDateRecord(
+                date=attendance_date,
+                status=AttendanceStatus(status),
+                note=record.note or "",
+            )
+
+        if attendance_date == today:
+            return TeacherAttendanceDateRecord(
+                date=attendance_date,
+                status=AttendanceStatus.PENDING,
+                note="",
+            )
+
+        return TeacherAttendanceDateRecord(
+            date=attendance_date,
+            status=AttendanceStatus.ABSENT,
+            note="",
         )

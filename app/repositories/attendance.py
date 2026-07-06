@@ -31,6 +31,21 @@ class AttendanceRepository(BaseRepository[AttendanceRecord]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_class_ids(self, class_ids: list[int]) -> list[AttendanceRecord]:
+        """교사 담당 학급 전체 학생의 출석 기록을 한 번에 조회한다."""
+
+        if not class_ids:
+            return []
+
+        stmt = (
+            select(AttendanceRecord)
+            .join(User, AttendanceRecord.user_id == User.user_id)
+            .where(User.class_id.in_(class_ids))
+            .order_by(User.user_id, AttendanceRecord.attendance_date, AttendanceRecord.week_number)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_by_user_and_week(
         self,
         user_id: int,
