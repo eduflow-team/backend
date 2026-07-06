@@ -111,3 +111,10 @@ class AssignmentNotFoundError(DomainException):
 
     status_code = status.HTTP_404_NOT_FOUND
     default_message = "존재하지 않거나 이미 삭제된 과제입니다."
+
+
+class AttendanceAccessForbiddenError(DomainException):
+    """출석 API를 role에 맞지 않는 계정으로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "접근 권한이 없습니다."

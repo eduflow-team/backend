@@ -14,6 +14,7 @@ class AttendanceStatus(str, Enum):
     PRESENT = "PRESENT"
     ABSENT = "ABSENT"
     LATE = "LATE"
+    PENDING = "PENDING"
 
 
 class ProgressStatus(str, Enum):
