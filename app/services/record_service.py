@@ -12,11 +12,19 @@ from app.models.student_status import StudentAssignmentStatus
 from app.models.submission import Submission
 from app.models.user import User
 from app.repositories.assignment import AssignmentRepository
+from app.repositories.class_ import ClassRepository
 from app.repositories.evaluation import EvaluationRepository
 from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.submission import SubmissionRepository
 from app.repositories.user import UserRepository
-from app.schemas.records import StudentRecordItem, StudentRecordsResponse
+from app.schemas.records import (
+    StudentRecordItem,
+    StudentRecordsResponse,
+    TeacherRecordsStudentItem,
+    TeacherRecordsStudentsResponse,
+    TeacherStageSummary,
+    TeacherStageSummaryItem,
+)
 
 _TOTAL_STAGE_COUNT = 4
 _KNOWN_PROGRESS_STATUSES = {s.value for s in ProgressStatus}
@@ -26,6 +34,7 @@ class RecordService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.user_repository = UserRepository(session)
+        self.class_repository = ClassRepository(session)
         self.assignment_repository = AssignmentRepository(session)
         self.student_status_repository = StudentAssignmentStatusRepository(session)
         self.submission_repository = SubmissionRepository(session)
@@ -66,6 +75,35 @@ class RecordService:
             records=records,
         )
 
+    async def get_teacher_records_students(
+        self, user_id: int
+    ) -> TeacherRecordsStudentsResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        class_ids = await self._get_teacher_class_ids(teacher)
+
+        students = await self.user_repository.list_by_class_ids(class_ids, role="STUDENT")
+        if not students:
+            return TeacherRecordsStudentsResponse(students=[])
+
+        latest_assignment_by_class = await self._load_latest_assignment_by_class(class_ids)
+        assignment_ids = [
+            assignment.assignment_id
+            for assignments in latest_assignment_by_class.values()
+            for assignment in assignments.values()
+        ]
+        statuses = await self.student_status_repository.list_by_assignment_ids(assignment_ids)
+        statuses_by_student = self._group_statuses_by_student(statuses)
+
+        items = [
+            self._build_teacher_records_student_item(
+                student,
+                latest_assignment_by_class.get(student.class_id or -1, {}),
+                statuses_by_student.get(student.user_id, {}),
+            )
+            for student in students
+        ]
+        return TeacherRecordsStudentsResponse(students=items)
+
     async def _get_authorized_student(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
@@ -75,6 +113,32 @@ class RecordService:
             raise RecordsAccessForbiddenError()
 
         return user
+
+    async def _get_authorized_teacher(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            raise InvalidTokenError()
+
+        if user.role != "TEACHER":
+            raise RecordsAccessForbiddenError()
+
+        return user
+
+    async def _get_teacher_class_ids(self, teacher: User) -> list[int]:
+        classes = await self.class_repository.list_by_teacher(teacher.user_id)
+        class_ids = {c.class_id for c in classes}
+        if teacher.class_id is not None:
+            class_ids.add(teacher.class_id)
+        return sorted(class_ids)
+
+    async def _load_latest_assignment_by_class(
+        self, class_ids: list[int]
+    ) -> dict[int, dict[int, Assignment]]:
+        latest_by_class: dict[int, dict[int, Assignment]] = {}
+        for class_id in class_ids:
+            assignments = await self.assignment_repository.list_by_class(class_id)
+            latest_by_class[class_id] = self._group_latest_by_stage(assignments)
+        return latest_by_class
 
     async def _get_latest_assignment_by_stage(
         self, class_id: int | None
@@ -145,6 +209,46 @@ class RecordService:
             attempts_count=attempts_count,
             ai_feedback=ai_feedback,
             metadata=metadata,
+        )
+
+    def _build_teacher_records_student_item(
+        self,
+        student: User,
+        latest_assignment_by_stage: dict[int, Assignment],
+        status_by_assignment_id: dict[int, StudentAssignmentStatus],
+    ) -> TeacherRecordsStudentItem:
+        stage_items = {
+            f"stage_{stage}": self._build_teacher_stage_summary_item(
+                latest_assignment_by_stage.get(stage),
+                status_by_assignment_id,
+            )
+            for stage in range(1, _TOTAL_STAGE_COUNT + 1)
+        }
+
+        return TeacherRecordsStudentItem(
+            student_id=student.user_id,
+            student_name=student.name or "",
+            stage_summary=TeacherStageSummary(**stage_items),
+        )
+
+    def _build_teacher_stage_summary_item(
+        self,
+        assignment: Assignment | None,
+        status_by_assignment_id: dict[int, StudentAssignmentStatus],
+    ) -> TeacherStageSummaryItem:
+        status_row = (
+            status_by_assignment_id.get(assignment.assignment_id) if assignment else None
+        )
+        progress_status = self._resolve_progress_status(status_row)
+        score = (
+            status_row.best_score
+            if progress_status == ProgressStatus.COMPLETED.value and status_row
+            else None
+        )
+
+        return TeacherStageSummaryItem(
+            status=ProgressStatus(progress_status),
+            score=score,
         )
 
     def _group_latest_by_stage(self, assignments: list[Assignment]) -> dict[int, Assignment]:
