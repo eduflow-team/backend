@@ -41,11 +41,15 @@ def _build_validation_message(request: Request, exc: RequestValidationError) -> 
     is_teacher_attendance_patch = (
         request.method == "PATCH" and request.url.path.endswith("/teacher/attendance")
     )
+    is_search = request.method == "GET" and request.url.path.endswith("/search")
 
     for error in exc.errors():
         loc = error.get("loc", ())
         field = str(loc[-1]) if loc else ""
         error_type = error.get("type", "")
+
+        if is_search and field == "keyword":
+            return "검색 키워드가 누락되었거나 너무 짧습니다. (최소 2자 이상 입력)"
 
         if is_teacher_attendance_patch:
             return "수정할 출석 데이터의 형식이 올바르지 않습니다."

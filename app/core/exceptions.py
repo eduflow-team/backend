@@ -174,3 +174,17 @@ class RecordsAccessForbiddenError(DomainException):
 
     status_code = status.HTTP_403_FORBIDDEN
     default_message = "접근 권한이 없습니다."
+
+
+class InvalidSearchKeywordError(DomainException):
+    """검색 키워드가 누락되었거나 최소 길이 미만일 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "검색 키워드가 누락되었거나 너무 짧습니다. (최소 2자 이상 입력)"
+
+
+class SearchAccessForbiddenError(DomainException):
+    """통합 검색 API를 STUDENT/TEACHER 외 role로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "접근 권한이 없습니다."
