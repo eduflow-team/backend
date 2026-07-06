@@ -8,6 +8,7 @@ from app.schemas.notices import (
     StudentNoticeListResponse,
     TeacherNoticeCreateRequest,
     TeacherNoticeCreateResponse,
+    TeacherNoticeDeleteResponse,
 )
 from app.services.notice_service import NoticeService
 
@@ -54,6 +55,22 @@ async def create_teacher_notice(
     return await NoticeService(db).create_teacher_notice(user_id, payload)
 
 
-@router.delete("/teacher/notices/{id}", summary="공지사항 삭제")
-def delete_teacher_notice(id: int):
-    return {"status": "success", "data": {}}
+@router.delete(
+    "/teacher/notices/{id}",
+    summary="공지사항 삭제",
+    status_code=status.HTTP_200_OK,
+    response_model=TeacherNoticeDeleteResponse,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        403: {"model": ErrorDetail, "description": "학생 계정 또는 본인 작성 아닌 공지 삭제 시도"},
+        404: {"model": ErrorDetail, "description": "존재하지 않거나 이미 삭제된 공지"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def delete_teacher_notice(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> TeacherNoticeDeleteResponse:
+    await NoticeService(db).delete_teacher_notice(user_id, id)
+    return TeacherNoticeDeleteResponse()

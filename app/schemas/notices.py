@@ -52,6 +52,10 @@ class TeacherNoticeCreateResponse(BaseModel):
         return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+class TeacherNoticeDeleteResponse(BaseModel):
+    """DELETE /teacher/notices/{id} 성공 응답 (빈 객체)."""
+
+
 def compute_is_new(created_at: datetime | None, *, now: datetime | None = None) -> bool:
     """최근 3일 이내 작성 공지인지 판별한다."""
 

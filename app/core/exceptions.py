@@ -132,3 +132,17 @@ class InvalidNoticeCreateError(DomainException):
 
     status_code = status.HTTP_400_BAD_REQUEST
     default_message = "공지사항의 제목이나 내용이 누락되었습니다."
+
+
+class TeacherNoticeDeleteForbiddenError(DomainException):
+    """교사용 공지 삭제 API를 권한 없는 계정으로 접근할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "공지사항을 삭제할 권한이 없습니다."
+
+
+class NoticeNotFoundError(DomainException):
+    """존재하지 않거나 이미 삭제된 공지에 접근할 때 발생 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "존재하지 않거나 이미 삭제된 공지사항입니다."

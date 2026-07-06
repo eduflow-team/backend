@@ -3,10 +3,13 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    DomainException,
     InvalidNoticeCreateError,
     InvalidTokenError,
+    NoticeNotFoundError,
     NoticesAccessForbiddenError,
     TeacherNoticeCreateForbiddenError,
+    TeacherNoticeDeleteForbiddenError,
 )
 from app.models.notice import Notice
 from app.models.user import User
@@ -93,6 +96,20 @@ class NoticeService:
             created_at=notice.created_at,
         )
 
+    async def delete_teacher_notice(self, user_id: int, notice_id: int) -> None:
+        teacher = await self._get_authorized_teacher(
+            user_id, forbidden_error=TeacherNoticeDeleteForbiddenError
+        )
+        notice = await self.notice_repository.get_by_id(notice_id)
+        if notice is None:
+            raise NoticeNotFoundError()
+
+        if notice.author_id != teacher.user_id:
+            raise TeacherNoticeDeleteForbiddenError()
+
+        await self.notice_repository.soft_delete(notice)
+        await self.session.commit()
+
     async def _get_authorized_student(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
@@ -103,13 +120,18 @@ class NoticeService:
 
         return user
 
-    async def _get_authorized_teacher(self, user_id: int) -> User:
+    async def _get_authorized_teacher(
+        self,
+        user_id: int,
+        *,
+        forbidden_error: type[DomainException] = TeacherNoticeCreateForbiddenError,
+    ) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
             raise InvalidTokenError()
 
         if user.role != "TEACHER":
-            raise TeacherNoticeCreateForbiddenError()
+            raise forbidden_error()
 
         return user
 
