@@ -21,6 +21,21 @@ class AssignmentRepository(BaseRepository[Assignment]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_class_ids(self, class_ids: list[int]) -> list[Assignment]:
+        """교사 대시보드처럼 여러 학급의 과제를 한 번에 조회할 때 사용한다."""
+
+        if not class_ids:
+            return []
+
+        stmt = (
+            select(Assignment)
+            .where(Assignment.class_id.in_(class_ids))
+            .order_by(Assignment.created_at.desc())
+        )
+        stmt = self._apply_not_deleted(stmt)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_by_teacher(self, teacher_id: int) -> list[Assignment]:
         stmt = (
             select(Assignment)

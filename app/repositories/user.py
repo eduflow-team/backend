@@ -36,6 +36,20 @@ class UserRepository(BaseRepository[User]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_class_ids(self, class_ids: list[int], *, role: str | None = None) -> list[User]:
+        """교사 대시보드처럼 여러 학급의 학생을 한 번에 조회할 때 사용한다."""
+
+        if not class_ids:
+            return []
+
+        stmt = select(User).where(User.class_id.in_(class_ids))
+        if role is not None:
+            stmt = stmt.where(User.role == role)
+        stmt = stmt.order_by(User.user_id)
+        stmt = self._apply_not_deleted(stmt)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def search_by_name(self, keyword: str, *, limit: int = 20) -> list[User]:
         stmt = (
             select(User)

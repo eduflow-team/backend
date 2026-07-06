@@ -83,3 +83,31 @@ class InvalidRefreshTokenError(DomainException):
 
     status_code = status.HTTP_401_UNAUTHORIZED
     default_message = "Refresh Token이 만료되었거나 유효하지 않습니다. 다시 로그인해 주세요."
+
+
+class DashboardAccessForbiddenError(DomainException):
+    """학생/교사 전용 대시보드를 반대 role로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 대시보드에 접근할 권한이 없습니다."
+
+
+class TeacherAssignmentAccessForbiddenError(DomainException):
+    """교사용 과제 목록 API를 학생 role로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 과제 목록에 접근할 권한이 없습니다."
+
+
+class TeacherAssignmentDeleteForbiddenError(DomainException):
+    """교사용 과제 삭제 API를 권한 없는 계정으로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 과제를 삭제할 권한이 없습니다."
+
+
+class AssignmentNotFoundError(DomainException):
+    """존재하지 않거나 이미 삭제된 과제에 접근하려 할 때 발생 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "존재하지 않거나 이미 삭제된 과제입니다."

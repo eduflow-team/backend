@@ -15,6 +15,7 @@ class AttendanceRecord(Base):
     )
     week_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     attendance_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # 값 목록: app.models.enums.AttendanceStatus 참고
     status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
