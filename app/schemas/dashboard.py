@@ -76,6 +76,24 @@ class TeacherDashboardSummaryResponse(BaseModel):
     stage_submission_rates: list[StageSubmissionRateItem]
 
 
+class UnsubmittedStudentItem(BaseModel):
+    """GET /teacher/dashboard/students/unsubmitted의 학생별 미제출 항목.
+
+    `student_id`는 명세서 예시(`"std_001"`)와 달리 실제 스키마의 `user_id`(정수)를
+    그대로 사용한다. 다른 API들도 동일하게 실제 PK 타입을 따르고 있어 일관성을 맞췄다.
+    """
+
+    student_id: int
+    student_name: str
+    missing_stage: list[int]
+
+
+class TeacherUnsubmittedStudentsResponse(BaseModel):
+    """GET /teacher/dashboard/students/unsubmitted 성공 응답."""
+
+    unsubmitted_students: list[UnsubmittedStudentItem]
+
+
 class ErrorDetail(BaseModel):
     """에러 응답 포맷 (FastAPI 표준). 401 / 403 / 500 공통."""
 

@@ -21,6 +21,8 @@ from app.schemas.dashboard import (
     StudentAssignmentListResponse,
     StudentDashboardSummaryResponse,
     TeacherDashboardSummaryResponse,
+    TeacherUnsubmittedStudentsResponse,
+    UnsubmittedStudentItem,
 )
 
 _TOTAL_STAGE_COUNT = 4
@@ -84,17 +86,11 @@ class DashboardService:
 
     async def get_teacher_summary(self, user_id: int) -> TeacherDashboardSummaryResponse:
         teacher = await self._get_authorized_teacher(user_id)
-
-        classes = await self.class_repository.list_by_teacher(teacher.user_id)
-        class_ids = [c.class_id for c in classes]
-
-        students = await self.user_repository.list_by_class_ids(class_ids, role="STUDENT")
-        assignments = await self.assignment_repository.list_by_class_ids(class_ids)
-        assignment_ids = [a.assignment_id for a in assignments]
-
-        statuses = await self.student_status_repository.list_by_assignment_ids(assignment_ids)
-        statuses_by_student = self._group_statuses_by_student(statuses)
-        latest_assignment_by_stage = self._group_latest_by_stage(assignments)
+        (
+            students,
+            statuses_by_student,
+            latest_assignment_by_stage,
+        ) = await self._load_teacher_dashboard_context(teacher.user_id)
 
         total_students = len(students)
         total_score_by_student = {
@@ -126,6 +122,48 @@ class DashboardService:
             class_average_score=class_average_score,
             stage_submission_rates=stage_submission_rates,
         )
+
+    async def get_unsubmitted_students(self, user_id: int) -> TeacherUnsubmittedStudentsResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        (
+            students,
+            statuses_by_student,
+            latest_assignment_by_stage,
+        ) = await self._load_teacher_dashboard_context(teacher.user_id)
+
+        unsubmitted_students = [
+            UnsubmittedStudentItem(
+                student_id=student.user_id,
+                student_name=student.name,
+                missing_stage=missing_stages,
+            )
+            for student in students
+            if (
+                missing_stages := self._get_missing_stages(
+                    statuses_by_student.get(student.user_id, {}), latest_assignment_by_stage
+                )
+            )
+        ]
+
+        return TeacherUnsubmittedStudentsResponse(unsubmitted_students=unsubmitted_students)
+
+    async def _load_teacher_dashboard_context(
+        self, teacher_id: int
+    ) -> tuple[list[User], dict[int, dict[int, StudentAssignmentStatus]], dict[int, Assignment]]:
+        """교사 대시보드 API들이 공통으로 필요로 하는 학급/학생/과제/진행상태를 모아 반환한다."""
+
+        classes = await self.class_repository.list_by_teacher(teacher_id)
+        class_ids = [c.class_id for c in classes]
+
+        students = await self.user_repository.list_by_class_ids(class_ids, role="STUDENT")
+        assignments = await self.assignment_repository.list_by_class_ids(class_ids)
+        assignment_ids = [a.assignment_id for a in assignments]
+
+        statuses = await self.student_status_repository.list_by_assignment_ids(assignment_ids)
+        statuses_by_student = self._group_statuses_by_student(statuses)
+        latest_assignment_by_stage = self._group_latest_by_stage(assignments)
+
+        return students, statuses_by_student, latest_assignment_by_stage
 
     async def _get_authorized_student(self, user_id: int) -> User:
         return await self._get_authorized_user(user_id, "STUDENT")
@@ -187,12 +225,24 @@ class DashboardService:
         status_by_assignment_id: dict[int, StudentAssignmentStatus],
         latest_assignment_by_stage: dict[int, Assignment],
     ) -> bool:
-        for assignment in latest_assignment_by_stage.values():
+        return bool(
+            self._get_missing_stages(status_by_assignment_id, latest_assignment_by_stage)
+        )
+
+    def _get_missing_stages(
+        self,
+        status_by_assignment_id: dict[int, StudentAssignmentStatus],
+        latest_assignment_by_stage: dict[int, Assignment],
+    ) -> list[int]:
+        """학생이 아직 `COMPLETED`하지 못한 단계 번호 목록을 오름차순으로 반환한다."""
+
+        missing_stages = []
+        for stage, assignment in sorted(latest_assignment_by_stage.items()):
             status_row = status_by_assignment_id.get(assignment.assignment_id)
             progress_status, _ = self._resolve_progress(status_row)
             if progress_status != ProgressStatus.COMPLETED.value:
-                return True
-        return False
+                missing_stages.append(stage)
+        return missing_stages
 
     def _build_stage_submission_rate(
         self,

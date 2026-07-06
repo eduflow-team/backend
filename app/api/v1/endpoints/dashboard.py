@@ -8,6 +8,7 @@ from app.schemas.dashboard import (
     StudentAssignmentListResponse,
     StudentDashboardSummaryResponse,
     TeacherDashboardSummaryResponse,
+    TeacherUnsubmittedStudentsResponse,
 )
 from app.services.dashboard_service import DashboardService
 
@@ -68,9 +69,22 @@ async def get_teacher_dashboard_summary(
     return await DashboardService(db).get_teacher_summary(user_id)
 
 
-@router.get("/teacher/dashboard/students/unsubmitted", summary="미제출 학생 목록")
-def get_unsubmitted_students():
-    return {"status": "success", "data": {}}
+@router.get(
+    "/teacher/dashboard/students/unsubmitted",
+    summary="미제출 학생 목록",
+    status_code=status.HTTP_200_OK,
+    response_model=TeacherUnsubmittedStudentsResponse,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        403: {"model": ErrorDetail, "description": "학생 권한으로 교사 API를 호출하거나 그 반대의 경우"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def get_unsubmitted_students(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> TeacherUnsubmittedStudentsResponse:
+    return await DashboardService(db).get_unsubmitted_students(user_id)
 
 
 @router.get("/teacher/dashboard/assignments", summary="생성 과제 목록")
