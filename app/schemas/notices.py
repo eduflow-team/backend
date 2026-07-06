@@ -36,6 +36,7 @@ class TeacherNoticeCreateRequest(BaseModel):
 
     title: str
     content: str
+    class_id: int | None
 
 
 class TeacherNoticeCreateResponse(BaseModel):

@@ -73,9 +73,15 @@ class NoticeService:
         if not title or not content:
             raise InvalidNoticeCreateError()
 
+        notice_class_id = payload.class_id
+        if notice_class_id is not None:
+            allowed_class_ids = await self._get_teacher_class_ids(teacher)
+            if notice_class_id not in allowed_class_ids:
+                raise TeacherNoticeCreateForbiddenError()
+
         notice = Notice(
             author_id=teacher.user_id,
-            class_id=await self._resolve_teacher_class_id(teacher),
+            class_id=notice_class_id,
             title=title,
             content=content,
         )
@@ -107,11 +113,12 @@ class NoticeService:
 
         return user
 
-    async def _resolve_teacher_class_id(self, teacher: User) -> int | None:
+    async def _get_teacher_class_ids(self, teacher: User) -> set[int]:
         classes = await self.class_repository.list_by_teacher(teacher.user_id)
-        if classes:
-            return classes[0].class_id
-        return teacher.class_id
+        class_ids = {c.class_id for c in classes}
+        if teacher.class_id is not None:
+            class_ids.add(teacher.class_id)
+        return class_ids
 
     async def _resolve_author_names(self, author_ids: set[int]) -> dict[int, str]:
         names: dict[int, str] = {}
