@@ -4,7 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user_id
 from app.db.session import get_db
 from app.schemas.dashboard import ErrorDetail
-from app.schemas.notices import StudentNoticeListResponse
+from app.schemas.notices import (
+    StudentNoticeListResponse,
+    TeacherNoticeCreateRequest,
+    TeacherNoticeCreateResponse,
+)
 from app.services.notice_service import NoticeService
 
 router = APIRouter()
@@ -30,9 +34,24 @@ async def get_student_notices(
     return await NoticeService(db).get_student_notices(user_id, page=page, size=size)
 
 
-@router.post("/teacher/notices", summary="새 공지사항 작성")
-def create_teacher_notice():
-    return {"status": "success", "data": {}}
+@router.post(
+    "/teacher/notices",
+    summary="새 공지사항 작성",
+    status_code=status.HTTP_201_CREATED,
+    response_model=TeacherNoticeCreateResponse,
+    responses={
+        400: {"model": ErrorDetail, "description": "제목 또는 내용 누락"},
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        403: {"model": ErrorDetail, "description": "role ≠ TEACHER"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def create_teacher_notice(
+    payload: TeacherNoticeCreateRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> TeacherNoticeCreateResponse:
+    return await NoticeService(db).create_teacher_notice(user_id, payload)
 
 
 @router.delete("/teacher/notices/{id}", summary="공지사항 삭제")

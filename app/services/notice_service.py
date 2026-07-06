@@ -2,11 +2,24 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import InvalidTokenError, NoticesAccessForbiddenError
+from app.core.exceptions import (
+    InvalidNoticeCreateError,
+    InvalidTokenError,
+    NoticesAccessForbiddenError,
+    TeacherNoticeCreateForbiddenError,
+)
+from app.models.notice import Notice
 from app.models.user import User
+from app.repositories.class_ import ClassRepository
 from app.repositories.notice import NoticeRepository
 from app.repositories.user import UserRepository
-from app.schemas.notices import NoticeItem, StudentNoticeListResponse, compute_is_new
+from app.schemas.notices import (
+    NoticeItem,
+    StudentNoticeListResponse,
+    TeacherNoticeCreateRequest,
+    TeacherNoticeCreateResponse,
+    compute_is_new,
+)
 
 
 class NoticeService:
@@ -14,6 +27,7 @@ class NoticeService:
         self.session = session
         self.notice_repository = NoticeRepository(session)
         self.user_repository = UserRepository(session)
+        self.class_repository = ClassRepository(session)
 
     async def get_student_notices(
         self,
@@ -47,6 +61,32 @@ class NoticeService:
 
         return StudentNoticeListResponse(total_count=total_count, notices=items)
 
+    async def create_teacher_notice(
+        self,
+        user_id: int,
+        payload: TeacherNoticeCreateRequest,
+    ) -> TeacherNoticeCreateResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+
+        title = payload.title.strip()
+        content = payload.content.strip()
+        if not title or not content:
+            raise InvalidNoticeCreateError()
+
+        notice = Notice(
+            author_id=teacher.user_id,
+            class_id=await self._resolve_teacher_class_id(teacher),
+            title=title,
+            content=content,
+        )
+        notice = await self.notice_repository.create(notice)
+        await self.session.commit()
+
+        return TeacherNoticeCreateResponse(
+            notice_id=notice.notice_id,
+            created_at=notice.created_at,
+        )
+
     async def _get_authorized_student(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
@@ -56,6 +96,22 @@ class NoticeService:
             raise NoticesAccessForbiddenError()
 
         return user
+
+    async def _get_authorized_teacher(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            raise InvalidTokenError()
+
+        if user.role != "TEACHER":
+            raise TeacherNoticeCreateForbiddenError()
+
+        return user
+
+    async def _resolve_teacher_class_id(self, teacher: User) -> int | None:
+        classes = await self.class_repository.list_by_teacher(teacher.user_id)
+        if classes:
+            return classes[0].class_id
+        return teacher.class_id
 
     async def _resolve_author_names(self, author_ids: set[int]) -> dict[int, str]:
         names: dict[int, str] = {}

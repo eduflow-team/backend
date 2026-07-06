@@ -31,6 +31,26 @@ class StudentNoticeListResponse(BaseModel):
     notices: list[NoticeItem]
 
 
+class TeacherNoticeCreateRequest(BaseModel):
+    """POST /teacher/notices 요청 바디."""
+
+    title: str
+    content: str
+
+
+class TeacherNoticeCreateResponse(BaseModel):
+    """POST /teacher/notices 성공 응답."""
+
+    notice_id: int
+    created_at: datetime | None
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def compute_is_new(created_at: datetime | None, *, now: datetime | None = None) -> bool:
     """최근 3일 이내 작성 공지인지 판별한다."""
 
