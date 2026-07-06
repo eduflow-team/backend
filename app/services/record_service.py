@@ -20,8 +20,13 @@ from app.repositories.user import UserRepository
 from app.schemas.records import (
     StudentRecordItem,
     StudentRecordsResponse,
+    TeacherGradesStudentItem,
+    TeacherRecordsGradesResponse,
     TeacherRecordsStudentItem,
     TeacherRecordsStudentsResponse,
+    TeacherStageAverages,
+    TeacherStageDetailItem,
+    TeacherStageDetails,
     TeacherStageSummary,
     TeacherStageSummaryItem,
 )
@@ -103,6 +108,51 @@ class RecordService:
             for student in students
         ]
         return TeacherRecordsStudentsResponse(students=items)
+
+    async def get_teacher_records_grades(
+        self, user_id: int
+    ) -> TeacherRecordsGradesResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        class_ids = await self._get_teacher_class_ids(teacher)
+
+        students = await self.user_repository.list_by_class_ids(class_ids, role="STUDENT")
+        latest_assignment_by_class = await self._load_latest_assignment_by_class(class_ids)
+        assignment_ids = [
+            assignment.assignment_id
+            for assignments in latest_assignment_by_class.values()
+            for assignment in assignments.values()
+        ]
+
+        statuses = await self.student_status_repository.list_by_assignment_ids(assignment_ids)
+        statuses_by_student = self._group_statuses_by_student(statuses)
+        evaluations_by_user_assignment = await self._load_evaluations_by_user_assignment(
+            assignment_ids
+        )
+
+        stage_scores_by_stage: dict[int, list[int]] = defaultdict(list)
+        student_items: list[TeacherGradesStudentItem] = []
+
+        for student in students:
+            latest_assignment_by_stage = latest_assignment_by_class.get(
+                student.class_id or -1, {}
+            )
+            status_by_assignment_id = statuses_by_student.get(student.user_id, {})
+            student_items.append(
+                self._build_teacher_grades_student_item(
+                    student,
+                    latest_assignment_by_stage,
+                    status_by_assignment_id,
+                    evaluations_by_user_assignment,
+                    stage_scores_by_stage,
+                )
+            )
+
+        stage_averages = self._build_stage_averages(stage_scores_by_stage)
+
+        return TeacherRecordsGradesResponse(
+            stage_averages=stage_averages,
+            students=student_items,
+        )
 
     async def _get_authorized_student(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
@@ -250,6 +300,122 @@ class RecordService:
             status=ProgressStatus(progress_status),
             score=score,
         )
+
+    def _build_teacher_grades_student_item(
+        self,
+        student: User,
+        latest_assignment_by_stage: dict[int, Assignment],
+        status_by_assignment_id: dict[int, StudentAssignmentStatus],
+        evaluations_by_user_assignment: dict[tuple[int, int], Evaluation],
+        stage_scores_by_stage: dict[int, list[int]],
+    ) -> TeacherGradesStudentItem:
+        stage_items: dict[str, TeacherStageDetailItem] = {}
+        completed_scores: list[int] = []
+
+        for stage in range(1, _TOTAL_STAGE_COUNT + 1):
+            assignment = latest_assignment_by_stage.get(stage)
+            status_row = (
+                status_by_assignment_id.get(assignment.assignment_id) if assignment else None
+            )
+            progress_status = self._resolve_progress_status(status_row)
+            score: int | None = None
+            summary: str | None = None
+
+            if (
+                progress_status == ProgressStatus.COMPLETED.value
+                and status_row is not None
+                and status_row.best_score is not None
+            ):
+                score = status_row.best_score
+                completed_scores.append(score)
+                stage_scores_by_stage[stage].append(score)
+
+                if assignment is not None:
+                    evaluation = evaluations_by_user_assignment.get(
+                        (student.user_id, assignment.assignment_id)
+                    )
+                    if evaluation is not None:
+                        summary = self._build_stage_detail_summary(
+                            evaluation.evaluation_metadata
+                        )
+
+            stage_items[f"stage_{stage}"] = TeacherStageDetailItem(
+                score=score,
+                summary=summary,
+            )
+
+        average_score = (
+            round(sum(completed_scores) / len(completed_scores), 1)
+            if completed_scores
+            else 0.0
+        )
+
+        return TeacherGradesStudentItem(
+            student_id=student.user_id,
+            student_name=student.name or "",
+            average_score=average_score,
+            stage_details=TeacherStageDetails(**stage_items),
+        )
+
+    def _build_stage_averages(
+        self, stage_scores_by_stage: dict[int, list[int]]
+    ) -> TeacherStageAverages:
+        stage_average_values: dict[str, float | None] = {}
+        non_null_averages: list[float] = []
+
+        for stage in range(1, _TOTAL_STAGE_COUNT + 1):
+            scores = stage_scores_by_stage.get(stage, [])
+            if scores:
+                average = round(sum(scores) / len(scores), 1)
+                stage_average_values[f"stage_{stage}"] = average
+                non_null_averages.append(average)
+            else:
+                stage_average_values[f"stage_{stage}"] = None
+
+        total_average = (
+            round(sum(non_null_averages) / len(non_null_averages), 1)
+            if non_null_averages
+            else 0.0
+        )
+
+        return TeacherStageAverages(
+            **stage_average_values,
+            total_average=total_average,
+        )
+
+    def _build_stage_detail_summary(self, metadata: dict | None) -> str | None:
+        if not metadata:
+            return None
+
+        if summary := metadata.get("summary"):
+            return str(summary)
+
+        if optimal_parameters := metadata.get("optimal_parameters"):
+            return str(optimal_parameters)
+
+        found_errors = metadata.get("found_errors")
+        if isinstance(found_errors, list) and found_errors:
+            return f"{len(found_errors)}/{len(found_errors)} ✅"
+
+        return None
+
+    async def _load_evaluations_by_user_assignment(
+        self, assignment_ids: list[int]
+    ) -> dict[tuple[int, int], Evaluation]:
+        mapping: dict[tuple[int, int], Evaluation] = {}
+        for assignment_id in assignment_ids:
+            submissions = await self.submission_repository.list_by_assignment(assignment_id)
+            for submission in submissions:
+                if not submission.is_final:
+                    continue
+
+                evaluation = await self.evaluation_repository.get_by_submission_id(
+                    submission.submission_id
+                )
+                if evaluation is not None:
+                    mapping[(submission.user_id, assignment_id)] = evaluation
+
+        return mapping
 
     def _group_latest_by_stage(self, assignments: list[Assignment]) -> dict[int, Assignment]:
         latest_by_stage: dict[int, Assignment] = {}
