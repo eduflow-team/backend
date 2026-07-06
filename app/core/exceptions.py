@@ -132,3 +132,38 @@ class InvalidAttendanceUpdateError(DomainException):
 
     status_code = status.HTTP_400_BAD_REQUEST
     default_message = "수정할 출석 데이터의 형식이 올바르지 않습니다."
+
+
+class NoticesAccessForbiddenError(DomainException):
+    """학생 전용 공지 API를 role 불일치 계정으로 접근할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "접근 권한이 없습니다."
+
+
+class TeacherNoticeCreateForbiddenError(DomainException):
+    """교사용 공지 작성 API를 권한 없는 계정으로 접근할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "공지사항을 작성할 권한이 없습니다."
+
+
+class InvalidNoticeCreateError(DomainException):
+    """공지 작성 시 제목 또는 내용이 누락됐을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "공지사항의 제목이나 내용이 누락되었습니다."
+
+
+class TeacherNoticeDeleteForbiddenError(DomainException):
+    """교사용 공지 삭제 API를 권한 없는 계정으로 접근할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "공지사항을 삭제할 권한이 없습니다."
+
+
+class NoticeNotFoundError(DomainException):
+    """존재하지 않거나 이미 삭제된 공지에 접근할 때 발생 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "존재하지 않거나 이미 삭제된 공지사항입니다."
