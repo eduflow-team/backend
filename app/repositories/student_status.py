@@ -74,3 +74,19 @@ class StudentAssignmentStatusRepository(BaseRepository[StudentAssignmentStatus])
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_by_assignment_ids(
+        self, assignment_ids: list[int]
+    ) -> list[StudentAssignmentStatus]:
+        """교사 대시보드처럼 학급의 여러 과제 진행 상태를 한 번에 조회할 때 사용한다."""
+
+        if not assignment_ids:
+            return []
+
+        stmt = (
+            select(StudentAssignmentStatus)
+            .where(StudentAssignmentStatus.assignment_id.in_(assignment_ids))
+            .order_by(StudentAssignmentStatus.user_id)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
