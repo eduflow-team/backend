@@ -111,3 +111,24 @@ class AssignmentNotFoundError(DomainException):
 
     status_code = status.HTTP_404_NOT_FOUND
     default_message = "존재하지 않거나 이미 삭제된 과제입니다."
+
+
+class AttendanceAccessForbiddenError(DomainException):
+    """출석 API를 role에 맞지 않는 계정으로 접근하려 할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "접근 권한이 없습니다."
+
+
+class AttendanceUpdateForbiddenError(DomainException):
+    """PATCH /teacher/attendance를 권한 없는 계정으로 호출할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "출석부를 수정할 권한이 없습니다."
+
+
+class InvalidAttendanceUpdateError(DomainException):
+    """PATCH /teacher/attendance 요청 바디가 명세와 맞지 않을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "수정할 출석 데이터의 형식이 올바르지 않습니다."

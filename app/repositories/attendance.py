@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +33,21 @@ class AttendanceRepository(BaseRepository[AttendanceRecord]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_class_ids(self, class_ids: list[int]) -> list[AttendanceRecord]:
+        """교사 담당 학급 전체 학생의 출석 기록을 한 번에 조회한다."""
+
+        if not class_ids:
+            return []
+
+        stmt = (
+            select(AttendanceRecord)
+            .join(User, AttendanceRecord.user_id == User.user_id)
+            .where(User.class_id.in_(class_ids))
+            .order_by(User.user_id, AttendanceRecord.attendance_date, AttendanceRecord.week_number)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_by_user_and_week(
         self,
         user_id: int,
@@ -42,6 +59,42 @@ class AttendanceRepository(BaseRepository[AttendanceRecord]):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_by_user_and_date(
+        self,
+        user_id: int,
+        attendance_date: date,
+    ) -> AttendanceRecord | None:
+        stmt = select(AttendanceRecord).where(
+            AttendanceRecord.user_id == user_id,
+            AttendanceRecord.attendance_date == attendance_date,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def upsert_by_user_and_date(
+        self,
+        *,
+        user_id: int,
+        attendance_date: date,
+        status: str | None,
+        note: str,
+    ) -> AttendanceRecord:
+        existing = await self.get_by_user_and_date(user_id, attendance_date)
+        if existing is None:
+            return await self.create(
+                AttendanceRecord(
+                    user_id=user_id,
+                    week_number=None,
+                    attendance_date=attendance_date,
+                    status=status,
+                    note=note,
+                )
+            )
+
+        existing.status = status
+        existing.note = note
+        return await self.update(existing)
 
     async def upsert(self, record: AttendanceRecord) -> AttendanceRecord:
         if record.week_number is None:
