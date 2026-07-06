@@ -38,10 +38,17 @@ def _build_validation_message(request: Request, exc: RequestValidationError) -> 
     is_logout = request.url.path.endswith("/logout")
     is_refresh = request.url.path.endswith("/refresh")
 
+    is_teacher_attendance_patch = (
+        request.method == "PATCH" and request.url.path.endswith("/teacher/attendance")
+    )
+
     for error in exc.errors():
         loc = error.get("loc", ())
         field = str(loc[-1]) if loc else ""
         error_type = error.get("type", "")
+
+        if is_teacher_attendance_patch:
+            return "수정할 출석 데이터의 형식이 올바르지 않습니다."
 
         if field == "email":
             return "유효하지 않은 이메일 형식입니다."

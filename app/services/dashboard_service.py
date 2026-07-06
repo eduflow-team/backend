@@ -13,11 +13,12 @@ from app.core.exceptions import (
     TeacherAssignmentDeleteForbiddenError,
 )
 from app.models.assignment import Assignment
-from app.models.enums import AttendanceStatus, ProgressStatus
+from app.models.enums import ProgressStatus
 from app.models.student_status import StudentAssignmentStatus
 from app.models.user import User
 from app.repositories.assignment import AssignmentRepository
 from app.repositories.attendance import AttendanceRepository
+from app.services.attendance_stats import compute_attendance_summary
 from app.repositories.class_ import ClassRepository
 from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.user import UserRepository
@@ -381,12 +382,5 @@ class DashboardService:
 
     async def _get_attendance_rate(self, user_id: int) -> float:
         records = await self.attendance_repository.list_by_user(user_id)
-        if not records:
-            return 0.0
-
-        attended_count = sum(
-            1
-            for r in records
-            if r.status is not None and r.status.upper() == AttendanceStatus.PRESENT.value
-        )
-        return round(attended_count / len(records) * 100, 1)
+        attendance_rate, _, _, _ = compute_attendance_summary(records)
+        return attendance_rate
