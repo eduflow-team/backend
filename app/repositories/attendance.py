@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +59,42 @@ class AttendanceRepository(BaseRepository[AttendanceRecord]):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_by_user_and_date(
+        self,
+        user_id: int,
+        attendance_date: date,
+    ) -> AttendanceRecord | None:
+        stmt = select(AttendanceRecord).where(
+            AttendanceRecord.user_id == user_id,
+            AttendanceRecord.attendance_date == attendance_date,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def upsert_by_user_and_date(
+        self,
+        *,
+        user_id: int,
+        attendance_date: date,
+        status: str | None,
+        note: str,
+    ) -> AttendanceRecord:
+        existing = await self.get_by_user_and_date(user_id, attendance_date)
+        if existing is None:
+            return await self.create(
+                AttendanceRecord(
+                    user_id=user_id,
+                    week_number=None,
+                    attendance_date=attendance_date,
+                    status=status,
+                    note=note,
+                )
+            )
+
+        existing.status = status
+        existing.note = note
+        return await self.update(existing)
 
     async def upsert(self, record: AttendanceRecord) -> AttendanceRecord:
         if record.week_number is None:

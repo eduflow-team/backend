@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, Field, field_serializer
 
 from app.models.enums import AttendanceStatus
 
@@ -65,6 +65,21 @@ class TeacherAttendanceResponse(BaseModel):
     @field_serializer("attendance_dates")
     def serialize_attendance_dates(self, value: list[date]) -> list[str]:
         return [d.isoformat() for d in value]
+
+
+class TeacherAttendanceUpdateRecord(BaseModel):
+    """PATCH /teacher/attendance의 학생별 수정 항목."""
+
+    student_id: int
+    status: AttendanceStatus
+    note: str = ""
+
+
+class TeacherAttendanceUpdateRequest(BaseModel):
+    """PATCH /teacher/attendance 요청 바디."""
+
+    date: date
+    records: list[TeacherAttendanceUpdateRecord] = Field(..., min_length=1)
 
 
 class ErrorDetail(BaseModel):

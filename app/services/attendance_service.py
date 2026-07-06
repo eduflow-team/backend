@@ -5,7 +5,11 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AttendanceAccessForbiddenError, InvalidTokenError
+from app.core.exceptions import (
+    AttendanceAccessForbiddenError,
+    AttendanceUpdateForbiddenError,
+    InvalidTokenError,
+)
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus
 from app.models.user import User
@@ -18,12 +22,14 @@ from app.schemas.attendance import (
     TeacherAttendanceDateRecord,
     TeacherAttendanceResponse,
     TeacherAttendanceStudentItem,
+    TeacherAttendanceUpdateRequest,
 )
 from app.services.attendance_stats import compute_attendance_summary, normalize_attendance_status
 
 
 class AttendanceService:
     def __init__(self, session: AsyncSession) -> None:
+        self.session = session
         self.user_repository = UserRepository(session)
         self.class_repository = ClassRepository(session)
         self.attendance_repository = AttendanceRepository(session)
@@ -78,6 +84,49 @@ class AttendanceService:
             attendance_dates=attendance_dates,
             students=student_items,
         )
+
+    async def update_teacher_attendance(
+        self,
+        user_id: int,
+        payload: TeacherAttendanceUpdateRequest,
+    ) -> dict:
+        teacher = await self._get_authorized_teacher_for_update(user_id)
+        allowed_student_ids = await self._get_teacher_student_ids(teacher.user_id)
+
+        for item in payload.records:
+            if item.student_id not in allowed_student_ids:
+                raise AttendanceUpdateForbiddenError()
+
+            await self.attendance_repository.upsert_by_user_and_date(
+                user_id=item.student_id,
+                attendance_date=payload.date,
+                status=self._status_to_db(item.status),
+                note=item.note,
+            )
+
+        await self.session.commit()
+        return {}
+
+    async def _get_teacher_student_ids(self, teacher_id: int) -> set[int]:
+        classes = await self.class_repository.list_by_teacher(teacher_id)
+        class_ids = [c.class_id for c in classes]
+        students = await self.user_repository.list_by_class_ids(class_ids, role="STUDENT")
+        return {student.user_id for student in students}
+
+    async def _get_authorized_teacher_for_update(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            raise InvalidTokenError()
+
+        if user.role != "TEACHER":
+            raise AttendanceUpdateForbiddenError()
+
+        return user
+
+    def _status_to_db(self, status: AttendanceStatus) -> str | None:
+        if status == AttendanceStatus.PENDING:
+            return None
+        return status.value
 
     async def _get_authorized_student(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
