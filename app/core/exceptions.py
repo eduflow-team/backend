@@ -188,3 +188,59 @@ class SearchAccessForbiddenError(DomainException):
 
     status_code = status.HTTP_403_FORBIDDEN
     default_message = "접근 권한이 없습니다."
+
+
+class Stage1AccessForbiddenError(DomainException):
+    """1단계 과제 API를 role·학급 권한이 없는 계정으로 접근할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 과제에 접근할 권한이 없습니다."
+
+
+class InvalidStage1ParameterError(DomainException):
+    """1단계 chat/submit 파라미터가 누락되었거나 허용 범위를 넘을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "파라미터 허용 범위를 초과했습니다."
+
+
+class InvalidStage1CreateError(DomainException):
+    """1단계 과제 생성 시 필수 필드가 누락됐을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "필수 파라미터(문서 파일, 질문 등)가 누락되었습니다."
+
+
+class UnsupportedStage1FileTypeError(DomainException):
+    """지원하지 않는 문서 형식으로 1단계 과제를 생성할 때 발생 (415)."""
+
+    status_code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    default_message = "지원하지 않는 파일 형식입니다."
+
+
+class Stage1FileTooLargeError(DomainException):
+    """1단계 과제 문서 용량이 제한을 초과할 때 발생 (413)."""
+
+    status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    default_message = "파일 용량이 제한을 초과했습니다."
+
+
+class Stage1DocumentProcessingError(DomainException):
+    """문서 청크 분할·임베딩 처리 중 서버 오류가 발생했을 때 (500)."""
+
+    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    default_message = "문서 청크 분할 및 벡터 임베딩 처리 중 서버 오류가 발생했습니다."
+
+
+class Stage1SubmitLimitExceededError(DomainException):
+    """1단계 제출 시도 횟수(3회)를 초과했을 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "최대 시도 횟수(3회)를 모두 소진하여 더 이상 제출할 수 없습니다."
+
+
+class InvalidStage1SubmitError(DomainException):
+    """1단계 제출 데이터가 누락되었거나 형식이 올바르지 않을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "제출 데이터가 누락되었거나 형식이 올바르지 않습니다."
