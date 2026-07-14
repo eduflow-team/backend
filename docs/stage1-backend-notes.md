@@ -11,6 +11,14 @@
 
 Form 필드 (create): `class_id`, `subject`, `question`, `guideline`, `default_chunk_size`, `default_top_k`, `default_temperature`, `file`
 
+## 채점 (하이브리드 C)
+
+`submit`의 `_evaluate_response`:
+1. **원문 비교**로 `faithfulness_score` / `relevance_score` / `current_score` 산출
+2. **OpenAI chat**으로 학습용 `feedback` 생성 (`OPENAI_API_KEY` 없으면 템플릿 fallback)
+
+응답 JSON 필드는 Notion 명세와 동일. 이후 Langflow G-Eval로 점수까지 교체 가능.
+
 ## Langflow stub (AI 총괄)
 
 `AssignmentService.chat_step1` 안에서 `_mock_langflow_response`를 호출합니다.

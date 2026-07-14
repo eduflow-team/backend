@@ -354,9 +354,10 @@ class AssignmentService:
 
         documents = await self.document_repository.get_by_assignment_id(assignment_id)
         source_text = documents[0].raw_text if documents else ""
-        report, current_score = self._evaluate_response(
+        report, current_score = await self._evaluate_response(
             selected_ai_response=payload.selected_ai_response,
             source_text=source_text or "",
+            question=assignment.description or "",
         )
 
         submission = Submission(
@@ -531,27 +532,62 @@ class AssignmentService:
             )
         return " ".join(lines)
 
-    def _evaluate_response(
-        self, *, selected_ai_response: str, source_text: str
+    async def _evaluate_response(
+        self,
+        *,
+        selected_ai_response: str,
+        source_text: str,
+        question: str = "",
     ) -> tuple[Stage1EvaluationReport, int]:
-        """임시 채점기 (G-Eval 대체). 원문 토큰 겹침으로 faithfulness/relevance 추정."""
+        """하이브리드 채점(C).
 
+        1) 원문 토큰 겹침으로 faithfulness / relevance 점수 산출
+        2) OpenAI로 학습용 feedback 문장 생성 (키 없거나 실패 시 템플릿 fallback)
+        """
+
+        faithfulness, relevance, current_score, template_feedback = (
+            self._score_against_source(
+                selected_ai_response=selected_ai_response,
+                source_text=source_text,
+            )
+        )
+        feedback = await self._generate_ai_feedback(
+            question=question,
+            selected_ai_response=selected_ai_response,
+            source_text=source_text,
+            faithfulness=faithfulness,
+            relevance=relevance,
+            fallback=template_feedback,
+        )
+        report = Stage1EvaluationReport(
+            faithfulness_score=faithfulness,
+            relevance_score=relevance,
+            feedback=feedback,
+        )
+        return report, current_score
+
+    def _score_against_source(
+        self, *, selected_ai_response: str, source_text: str
+    ) -> tuple[int, int, int, str]:
         response_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", selected_ai_response))
         source_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", source_text))
         if not response_tokens:
-            report = Stage1EvaluationReport(
-                faithfulness_score=1,
-                relevance_score=1,
-                feedback="답변 내용이 거의 없어 평가가 어렵습니다. 자료에 근거한 설명을 더 채워보세요.",
+            return (
+                1,
+                1,
+                20,
+                "답변 내용이 거의 없어 평가가 어렵습니다. 자료에 근거한 설명을 더 채워보세요.",
             )
-            return report, 20
 
         overlap = response_tokens & source_tokens
         overlap_ratio = len(overlap) / max(len(response_tokens), 1)
         coverage = len(overlap) / max(len(source_tokens), 1) if source_tokens else 0.0
 
         faithfulness = max(1, min(5, round(overlap_ratio * 5)))
-        relevance = max(1, min(5, round((0.6 * overlap_ratio + 0.4 * min(1.0, coverage * 20)) * 5)))
+        relevance = max(
+            1,
+            min(5, round((0.6 * overlap_ratio + 0.4 * min(1.0, coverage * 20)) * 5)),
+        )
         current_score = int(round(((faithfulness + relevance) / 10) * 100))
 
         if faithfulness <= 2:
@@ -570,10 +606,66 @@ class AssignmentService:
                 "핵심 내용은 대체로 맞지만 일부 표현이 자료와 어긋날 수 있습니다. "
                 "chunk_size·top_k·temperature를 바꿔 보며 원문에 더 가까운 답을 찾아보세요."
             )
+        return faithfulness, relevance, current_score, feedback
 
-        report = Stage1EvaluationReport(
-            faithfulness_score=faithfulness,
-            relevance_score=relevance,
-            feedback=feedback,
+    async def _generate_ai_feedback(
+        self,
+        *,
+        question: str,
+        selected_ai_response: str,
+        source_text: str,
+        faithfulness: int,
+        relevance: int,
+        fallback: str,
+    ) -> str:
+        if not settings.OPENAI_API_KEY:
+            return fallback
+
+        source_preview = (source_text or "")[:1800]
+        answer_preview = (selected_ai_response or "")[:1200]
+        prompt = (
+            "당신은 AI 리터러시 교육용 채점 조교입니다. "
+            "학생이 파라미터(chunk_size, top_k, temperature)를 조절해 문서 기반 답을 찾는 과제입니다.\n"
+            "아래 점수(1~5)와 원문·답변을 보고, 학생이 다음에 무엇을 바꿀지 한국어로 2~3문장 피드백하세요. "
+            "숫자 점수만 반복하지 말고, temperature/top_k/chunk_size 중 조절 힌트를 포함하세요.\n\n"
+            f"질문: {question or '(없음)'}\n"
+            f"faithfulness(원문 충실): {faithfulness}/5\n"
+            f"relevance(관련성): {relevance}/5\n"
+            f"원문 일부:\n{source_preview}\n\n"
+            f"학생 선택 답변:\n{answer_preview}\n"
         )
-        return report, current_score
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.OPENAI_CHAT_MODEL,
+                        "temperature": 0.3,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "한국어로 짧고 친절한 학습 피드백만 출력하세요.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            return content or fallback
+        except Exception:  # noqa: BLE001
+            logger.exception("stage1 AI feedback generation failed; using template")
+            return fallback
