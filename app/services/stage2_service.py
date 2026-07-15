@@ -10,6 +10,8 @@ import json
 import logging
 from pathlib import Path
 
+from decimal import Decimal
+
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,10 +20,12 @@ from app.core.config import settings
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage2CreateError,
+    InvalidStage2HighlightError,
     InvalidTokenError,
     Stage2AccessForbiddenError,
     Stage2DocumentProcessingError,
     Stage2FileTooLargeError,
+    Stage2HighlightLimitExceededError,
     UnsupportedStage2FileTypeError,
 )
 from app.models.assignment import Assignment
@@ -47,7 +51,13 @@ from app.schemas.stage2 import (
     Stage2AttemptsDetail,
     Stage2CreateResponse,
     Stage2GeneratedErrorItem,
+    Step2HighlightEvaluationReport,
+    Step2HighlightRequest,
+    Step2HighlightResponse,
+    Step2HighlightResultItem,
 )
+from app.services.grading.geval_service import GEvalService
+from app.services.grading.highlight_grader import HighlightGrader
 from app.services.embedding_service import extract_text_from_upload
 
 logger = logging.getLogger(__name__)
@@ -67,6 +77,8 @@ class Stage2Service:
         self.status_repository = StudentAssignmentStatusRepository(session)
         self.highlight_repository = Stage2HighlightRepository(session)
         self.langflow_client = LangflowClient()
+        self.highlight_grader = HighlightGrader()
+        self.geval_service = GEvalService()
 
     async def create_step2_assignment(
         self,
@@ -267,6 +279,142 @@ class Stage2Service:
             status=progress_status,
             highlight_phase_complete=highlight_phase_complete,
             remaining_errors_to_find=remaining_errors,
+            attempts=Stage2AttemptsDetail(
+                max_attempts=max_attempts,
+                used_attempts=used_attempts,
+                remaining_attempts=remaining,
+            ),
+            cleared_highlights=cleared_highlights,
+        )
+
+    # ------------------------------------------------------------------
+    # Student: highlight submit
+    # ------------------------------------------------------------------
+
+    async def submit_highlight(
+        self,
+        user_id: int,
+        assignment_id: int,
+        payload: Step2HighlightRequest,
+    ) -> Step2HighlightResponse:
+        student = await self._get_authorized_student(user_id)
+        assignment, detail = await self._get_stage2_assignment_for_student(
+            student, assignment_id
+        )
+
+        if not payload.submissions:
+            raise InvalidStage2HighlightError()
+
+        item = payload.submissions[0]
+        highlighted_text = item.highlighted_text.strip()
+        student_reason = item.student_reason.strip()
+        if not highlighted_text or not student_reason:
+            raise InvalidStage2HighlightError()
+
+        max_attempts = assignment.max_attempts or settings.STAGE2_MAX_ATTEMPTS
+        status = await self.status_repository.get_or_create(
+            student.user_id,
+            assignment_id,
+            remaining_attempts=max_attempts,
+        )
+        if status.progress_status == ProgressStatus.COMPLETED.value:
+            raise Stage2AccessForbiddenError()
+
+        prior_highlights = await self.highlight_repository.list_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        if len(prior_highlights) >= max_attempts:
+            raise Stage2HighlightLimitExceededError()
+
+        error_answers = await self.stage2_error_answer_repository.list_by_assignment_id(
+            assignment_id
+        )
+        document = await self.document_repository.get_by_id(detail.document_id)
+        reference_text = document.raw_text if document and document.raw_text else ""
+
+        location_match = self.highlight_grader.match_location(
+            highlighted_text, error_answers
+        )
+        location_score = location_match.overlap_score if location_match else 0.0
+        location_ok = self.highlight_grader.is_location_match(location_score)
+
+        matched_answer = location_match.answer if location_match and location_ok else None
+        type_ok = self.highlight_grader.is_type_match(
+            item.student_error_type,
+            matched_answer.error_type if matched_answer else None,
+        )
+
+        reasoning = await self.geval_service.evaluate_reasoning(
+            student_reason=student_reason,
+            student_error_type=item.student_error_type,
+            hallucination_reason=(
+                matched_answer.hallucination_reason if matched_answer else ""
+            ),
+            evidence_sentence=matched_answer.evidence_sentence if matched_answer else "",
+            reference_document=reference_text,
+            location_ok=location_ok,
+            type_ok=type_ok,
+        )
+        reasoning_ok = reasoning.reasoning_score >= settings.STAGE2_REASONING_THRESHOLD
+        is_correct = location_ok and type_ok and reasoning_ok
+
+        if is_correct and matched_answer:
+            ai_feedback = reasoning.ai_feedback
+            correct_answer = matched_answer.correct_sentence or ""
+            correct_error_type = matched_answer.error_type or ""
+        else:
+            ai_feedback = reasoning.ai_feedback
+            correct_answer = None
+            correct_error_type = None
+
+        highlight_row = Stage2HighlightSubmission(
+            user_id=student.user_id,
+            assignment_id=assignment_id,
+            highlighted_text=highlighted_text,
+            start_index=matched_answer.start_index if matched_answer else None,
+            end_index=matched_answer.end_index if matched_answer else None,
+            error_type=item.student_error_type,
+            highlight_score=Decimal(str(round(location_score, 2))),
+            is_correct=is_correct,
+            feedback=ai_feedback,
+        )
+        await self.highlight_repository.create(highlight_row)
+
+        all_highlights = prior_highlights + [highlight_row]
+        used_attempts = len(all_highlights)
+        remaining = max(0, max_attempts - used_attempts)
+        cleared_highlights = self._collect_cleared_highlights(all_highlights)
+        expected_count = detail.expected_error_count or 0
+        highlight_phase_complete = len(cleared_highlights) >= expected_count > 0
+        remaining_errors = max(0, expected_count - len(cleared_highlights))
+
+        await self.status_repository.update_progress(
+            status,
+            progress_status=ProgressStatus.IN_PROGRESS.value,
+            remaining_attempts=remaining,
+        )
+        await self.session.commit()
+
+        result_item = Step2HighlightResultItem(
+            highlighted_text=highlighted_text,
+            student_error_type=item.student_error_type,
+            student_reason=student_reason,
+            is_correct=is_correct,
+            evaluation_report=Step2HighlightEvaluationReport(
+                location_match_score=round(location_score, 2),
+                error_type_match=type_ok,
+                reasoning_score=reasoning.reasoning_score,
+                ai_feedback=ai_feedback,
+            ),
+            correct_answer=correct_answer,
+            correct_error_type=correct_error_type,
+        )
+
+        return Step2HighlightResponse(
+            is_all_correct=is_correct,
+            highlight_phase_complete=highlight_phase_complete,
+            remaining_errors_to_find=remaining_errors,
+            results=[result_item],
             attempts=Stage2AttemptsDetail(
                 max_attempts=max_attempts,
                 used_attempts=used_attempts,

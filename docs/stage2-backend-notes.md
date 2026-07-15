@@ -6,8 +6,18 @@
 |--------|------|------|
 | POST | `/teacher/assignments/step2` | multipart + mock Langflow + DB 저장 |
 | GET | `/student/assignments/{id}/step2` | 상세·문서·시도·cleared_highlights |
+| POST | `/student/assignments/{id}/step2/highlight` | 하이브리드 채점 + `stage2_highlight_submissions` 저장 |
 
 Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JSON 배열 문자열), `expected_error_count`, `file`
+
+## Highlight 채점 (`HighlightGrader` + `GEvalService`)
+
+- **Rule-based**: `location_match_score` ≥ 0.8, `error_type` exact match
+- **G-Eval**: `student_reason` → `reasoning_score` (θ_R ≥ 0.95)
+- **판정**: 3조건 AND → `is_correct`
+- `OPENAI_API_KEY` 없으면 G-Eval fallback(키워드 겹침) — smoke test용
+
+환경변수: `STAGE2_LOCATION_THRESHOLD`, `STAGE2_REASONING_THRESHOLD` (기본 0.8 / 0.95)
 
 ## Langflow stub (AI 총괄)
 
@@ -26,5 +36,4 @@ Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JS
 
 ## 미구현 (후속)
 
-- `POST .../step2/highlight`
 - `POST .../step2/correction`

@@ -1,6 +1,6 @@
 """Stage 2 과제 API Request/Response 스키마 (Notion flat JSON)."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 ALLOWED_HALLUCINATION_TYPES = frozenset(
@@ -72,3 +72,47 @@ class Stage2CreateResponse(BaseModel):
     flawed_ai_response: str
     expected_error_count: int
     generated_errors: list[Stage2GeneratedErrorItem]
+
+
+class Step2HighlightSubmissionItem(BaseModel):
+    highlighted_text: str = Field(..., min_length=1)
+    student_error_type: str = Field(..., min_length=1)
+    student_reason: str = Field(..., min_length=1)
+
+    @field_validator("student_error_type")
+    @classmethod
+    def validate_error_type(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in ALLOWED_HALLUCINATION_TYPES:
+            raise ValueError("invalid student_error_type")
+        return normalized
+
+
+class Step2HighlightRequest(BaseModel):
+    submissions: list[Step2HighlightSubmissionItem] = Field(..., min_length=1, max_length=1)
+
+
+class Step2HighlightEvaluationReport(BaseModel):
+    location_match_score: float
+    error_type_match: bool
+    reasoning_score: float
+    ai_feedback: str
+
+
+class Step2HighlightResultItem(BaseModel):
+    highlighted_text: str
+    student_error_type: str
+    student_reason: str
+    is_correct: bool
+    evaluation_report: Step2HighlightEvaluationReport
+    correct_answer: str | None = None
+    correct_error_type: str | None = None
+
+
+class Step2HighlightResponse(BaseModel):
+    is_all_correct: bool
+    highlight_phase_complete: bool
+    remaining_errors_to_find: int
+    results: list[Step2HighlightResultItem]
+    attempts: Stage2AttemptsDetail
+    cleared_highlights: list[str]

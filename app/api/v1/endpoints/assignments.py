@@ -12,7 +12,12 @@ from app.schemas.assignments import (
     Stage1SubmitResponse,
 )
 from app.schemas.dashboard import ErrorDetail
-from app.schemas.stage2 import Stage2AssignmentDetailResponse, Stage2CreateResponse
+from app.schemas.stage2 import (
+    Stage2AssignmentDetailResponse,
+    Stage2CreateResponse,
+    Step2HighlightRequest,
+    Step2HighlightResponse,
+)
 from app.services.assignment_service import AssignmentService
 from app.services.stage2_service import Stage2Service
 
@@ -100,9 +105,26 @@ async def get_step2_assignment(
     return await Stage2Service(db).get_step2_assignment(user_id, id)
 
 
-@router.post("/student/assignments/{id}/step2/highlight", summary="오답 하이라이트 제출")
-def submit_step2_highlight(id: int):
-    return {"status": "success", "data": {}}
+@router.post(
+    "/student/assignments/{id}/step2/highlight",
+    summary="오답 하이라이트 제출",
+    status_code=status.HTTP_200_OK,
+    response_model=Step2HighlightResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+    },
+)
+async def submit_step2_highlight(
+    id: int,
+    payload: Step2HighlightRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Step2HighlightResponse:
+    return await Stage2Service(db).submit_highlight(user_id, id, payload)
 
 
 @router.post("/student/assignments/{id}/step2/correction", summary="빈칸 정답 수정 제출")

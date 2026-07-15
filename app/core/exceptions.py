@@ -281,6 +281,24 @@ class Stage2DocumentProcessingError(DomainException):
     default_message = "서버 내부 오류가 발생했습니다."
 
 
+class InvalidStage2HighlightError(DomainException):
+    """2단계 하이라이트 제출 데이터가 누락되었거나 형식이 올바르지 않을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = (
+        "제출할 하이라이트 데이터(submissions)가 누락되었거나 형식이 올바르지 않습니다."
+    )
+
+
+class Stage2HighlightLimitExceededError(DomainException):
+    """2단계 하이라이트 시도 횟수(5회)를 초과했을 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = (
+        "최대 시도 횟수(5회)를 모두 소진하여 더 이상 과제를 제출할 수 없습니다."
+    )
+
+
 class Stage2LangflowServiceUnavailableError(DomainException):
     """Langflow 2단계 생성 파이프라인 장애·타임아웃 시 발생 (503)."""
 
