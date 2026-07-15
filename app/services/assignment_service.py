@@ -327,6 +327,8 @@ class AssignmentService:
 
         if not payload.selected_ai_response.strip():
             raise InvalidStage1SubmitError()
+        if not payload.student_prompt.strip():
+            raise InvalidStage1SubmitError()
 
         max_attempts = assignment.max_attempts or settings.STAGE1_MAX_ATTEMPTS
         status = await self.status_repository.get_or_create(
@@ -370,7 +372,7 @@ class AssignmentService:
             user_id=student.user_id,
             assignment_id=assignment_id,
             submission_id=submission.submission_id,
-            student_prompt=None,
+            student_prompt=payload.student_prompt,
             ai_response=payload.selected_ai_response,
             attempt_number=attempt_number,
             temperature=Decimal(str(params.temperature)),

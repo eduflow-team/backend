@@ -29,6 +29,8 @@ Form 필드 (create): `class_id`, `subject`, `question`, `guideline`, `default_c
 
 `submissions.is_final`: 같은 학생·과제에서 **마지막 제출 1건만** `true` (이전 것은 해제). records 대표 제출용.
 
+submit Request에 `student_prompt`(chat message) 필수 — `stage1_attempts.student_prompt`에 저장.
+
 ## Langflow stub (AI 총괄)
 
 `AssignmentService.chat_step1` 안에서 `_mock_langflow_response`를 호출합니다.

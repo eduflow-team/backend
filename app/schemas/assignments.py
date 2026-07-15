@@ -41,6 +41,7 @@ class Stage1ChatResponse(BaseModel):
 class Stage1SubmitRequest(BaseModel):
     final_parameters: Stage1Parameters
     selected_ai_response: str = Field(..., min_length=1)
+    student_prompt: str = Field(..., min_length=1)
 
     @field_validator("selected_ai_response")
     @classmethod
@@ -48,6 +49,14 @@ class Stage1SubmitRequest(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("selected_ai_response는 비어 있을 수 없습니다.")
+        return stripped
+
+    @field_validator("student_prompt")
+    @classmethod
+    def strip_student_prompt(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("student_prompt는 비어 있을 수 없습니다.")
         return stripped
 
 
