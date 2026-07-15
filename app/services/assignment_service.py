@@ -7,6 +7,7 @@ chat은 동일 chunk_size면 DB 청크 임베딩을 재사용하고, temperature
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime
@@ -131,10 +132,7 @@ class AssignmentService:
 
         try:
             raw_text = extract_text_from_upload(filename, content)
-            chunks = split_text_into_chunks(raw_text, default_chunk_size)
-            if not chunks:
-                raise Stage1DocumentProcessingError()
-            embeddings = await embed_texts(chunks)
+            preset_chunk_sets = await self._embed_preset_chunk_sets(raw_text)
         except UnsupportedStage1FileTypeError:
             raise
         except Stage1DocumentProcessingError:
@@ -181,16 +179,18 @@ class AssignmentService:
         )
         document = await self.document_repository.create(document)
 
-        chunk_rows = [
-            DocumentChunk(
-                document_id=document.document_id,
-                content=chunk_text,
-                chunk_index=index,
-                chunk_metadata={"chunk_size": default_chunk_size},
-                embedding=embedding,
-            )
-            for index, (chunk_text, embedding) in enumerate(zip(chunks, embeddings, strict=True))
-        ]
+        chunk_rows: list[DocumentChunk] = []
+        for chunk_size, pairs in preset_chunk_sets:
+            for index, (chunk_text, embedding) in enumerate(pairs):
+                chunk_rows.append(
+                    DocumentChunk(
+                        document_id=document.document_id,
+                        content=chunk_text,
+                        chunk_index=index,
+                        chunk_metadata={"chunk_size": chunk_size},
+                        embedding=embedding,
+                    )
+                )
         await self.chunk_repository.bulk_create(chunk_rows)
         await self.session.commit()
 
@@ -459,12 +459,32 @@ class AssignmentService:
     def _validate_parameters(
         self, chunk_size: int, top_k: int, temperature: float
     ) -> None:
-        if not (50 <= chunk_size <= 4000):
-            raise InvalidStage1ParameterError()
+        presets = settings.STAGE1_CHUNK_SIZE_PRESETS
+        if chunk_size not in presets:
+            allowed = ", ".join(str(v) for v in presets)
+            raise InvalidStage1ParameterError(
+                f"chunk_size는 다음 값만 사용할 수 있습니다: {allowed}"
+            )
         if not (1 <= top_k <= 50):
             raise InvalidStage1ParameterError()
         if not (0.0 <= temperature <= 1.0):
             raise InvalidStage1ParameterError()
+
+    async def _embed_preset_chunk_sets(
+        self, raw_text: str
+    ) -> list[tuple[int, list[tuple[str, list[float]]]]]:
+        """preset chunk_size마다 청킹 후 임베딩을 병렬 수행한다."""
+
+        presets = settings.STAGE1_CHUNK_SIZE_PRESETS
+
+        async def _one(size: int) -> tuple[int, list[tuple[str, list[float]]]]:
+            chunks = split_text_into_chunks(raw_text, size)
+            if not chunks:
+                raise Stage1DocumentProcessingError()
+            embeddings = await embed_texts(chunks)
+            return size, list(zip(chunks, embeddings, strict=True))
+
+        return list(await asyncio.gather(*[_one(size) for size in presets]))
 
     def _parse_parameters(self, raw: dict | None) -> Stage1Parameters:
         if not raw:

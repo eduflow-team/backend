@@ -13,10 +13,11 @@ Form 필드 (create): `class_id`, `subject`, `question`, `guideline`, `default_c
 
 ## chat 검색·생성 분리
 
-- `chunk_size`가 저장된 `document_chunks.metadata.chunk_size`(또는 default)와 같고 embedding이 있으면 **DB 재사용** (문서 재임베딩 없음)
-- 질문 임베딩 → cosine 정렬 → `top_k` slice만 수행
+- 허용 `chunk_size` preset: **50 / 200 / 500 / 1200 / 3000** (그 외 → 400)
+- 과제 생성(업로드) 시 preset **5개를 병렬 임베딩**해 `document_chunks`에 저장 (`metadata.chunk_size`)
+- chat은 해당 size DB 벡터 **재사용** (문서 재임베딩 없음) → 질문 임베딩 → cosine → `top_k`
 - `temperature`는 생성(mock/Langflow)에만 사용
-- `chunk_size`가 다르면 실시간 청킹·임베딩 (preset 사전임베딩은 후속)
+- 구 과제에 해당 size가 없을 때만 실시간 임베딩 fallback
 
 ## 채점 (하이브리드 C)
 
