@@ -12,7 +12,9 @@ from app.schemas.assignments import (
     Stage1SubmitResponse,
 )
 from app.schemas.dashboard import ErrorDetail
+from app.schemas.stage2 import Stage2CreateResponse
 from app.services.assignment_service import AssignmentService
+from app.services.stage2_service import Stage2Service
 
 router = APIRouter()
 
@@ -133,6 +135,42 @@ async def create_step1_assignment(
     )
 
 
-@router.post("/teacher/assignments/step2", summary="2단계 과제 생성")
-def create_step2_assignment():
-    return {"status": "success", "data": {}}
+@router.post(
+    "/teacher/assignments/step2",
+    summary="2단계 과제 생성",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Stage2CreateResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        413: {"model": ErrorDetail},
+        415: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
+)
+async def create_step2_assignment(
+    title: str = Form(...),
+    subject: str = Form(...),
+    question: str = Form(...),
+    persona: str = Form(..., max_length=100),
+    hallucination_types: str = Form(
+        ...,
+        description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
+    ),
+    expected_error_count: int = Form(..., ge=1, le=5),
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2CreateResponse:
+    return await Stage2Service(db).create_step2_assignment(
+        user_id,
+        title=title,
+        subject=subject,
+        question=question,
+        persona=persona,
+        hallucination_types_raw=hallucination_types,
+        expected_error_count=expected_error_count,
+        file=file,
+    )

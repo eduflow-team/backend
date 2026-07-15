@@ -25,10 +25,15 @@ class Settings(BaseSettings):
     LANGFLOW_URL: str = "http://localhost:7860"
     LANGFLOW_API_KEY: str = ""
     LANGFLOW_STAGE1_CHAT_FLOW_ID: str = ""
+    LANGFLOW_STAGE2_FLOW_ID: str = ""
 
     # Stage 1 업로드 제한
     STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
     STAGE1_MAX_ATTEMPTS: int = 3
+
+    # Stage 2
+    STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
+    STAGE2_MAX_ATTEMPTS: int = 5
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
