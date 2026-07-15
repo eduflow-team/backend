@@ -12,7 +12,7 @@ from app.schemas.assignments import (
     Stage1SubmitResponse,
 )
 from app.schemas.dashboard import ErrorDetail
-from app.schemas.stage2 import Stage2CreateResponse
+from app.schemas.stage2 import Stage2AssignmentDetailResponse, Stage2CreateResponse
 from app.services.assignment_service import AssignmentService
 from app.services.stage2_service import Stage2Service
 
@@ -81,9 +81,23 @@ async def submit_step1_assignment(
     return await AssignmentService(db).submit_step1(user_id, id, payload)
 
 
-@router.get("/student/assignments/{id}/step2", summary="2단계 과제 상세")
-def get_step2_assignment(id: int):
-    return {"status": "success", "data": {}}
+@router.get(
+    "/student/assignments/{id}/step2",
+    summary="2단계 과제 상세",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage2AssignmentDetailResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step2_assignment(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2AssignmentDetailResponse:
+    return await Stage2Service(db).get_step2_assignment(user_id, id)
 
 
 @router.post("/student/assignments/{id}/step2/highlight", summary="오답 하이라이트 제출")

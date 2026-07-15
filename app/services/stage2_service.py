@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
 from app.core.exceptions import (
+    AssignmentNotFoundError,
     InvalidStage2CreateError,
     InvalidTokenError,
     Stage2AccessForbiddenError,
@@ -25,14 +26,25 @@ from app.core.exceptions import (
 )
 from app.models.assignment import Assignment
 from app.models.document import Document
+from app.models.enums import ProgressStatus
 from app.models.stage import Stage2AssignmentDetail, Stage2ErrorAnswer
+from app.models.submission import Stage2HighlightSubmission
 from app.models.user import User
 from app.repositories.assignment import AssignmentRepository
 from app.repositories.document import DocumentRepository
-from app.repositories.stage import Stage2DetailRepository, Stage2ErrorAnswerRepository
+from app.repositories.stage import (
+    Stage2DetailRepository,
+    Stage2ErrorAnswerRepository,
+    Stage2HighlightRepository,
+)
+from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.user import UserRepository
 from app.schemas.stage2 import (
     ALLOWED_HALLUCINATION_TYPES,
+    HALLUCINATION_TYPE_OPTIONS,
+    HallucinationTypeOption,
+    Stage2AssignmentDetailResponse,
+    Stage2AttemptsDetail,
     Stage2CreateResponse,
     Stage2GeneratedErrorItem,
 )
@@ -52,6 +64,8 @@ class Stage2Service:
         self.stage2_detail_repository = Stage2DetailRepository(session)
         self.stage2_error_answer_repository = Stage2ErrorAnswerRepository(session)
         self.document_repository = DocumentRepository(session)
+        self.status_repository = StudentAssignmentStatusRepository(session)
+        self.highlight_repository = Stage2HighlightRepository(session)
         self.langflow_client = LangflowClient()
 
     async def create_step2_assignment(
@@ -196,6 +210,71 @@ class Stage2Service:
             generated_errors=response_errors,
         )
 
+    # ------------------------------------------------------------------
+    # Student: detail
+    # ------------------------------------------------------------------
+
+    async def get_step2_assignment(
+        self, user_id: int, assignment_id: int
+    ) -> Stage2AssignmentDetailResponse:
+        student = await self._get_authorized_student(user_id)
+        assignment, detail = await self._get_stage2_assignment_for_student(
+            student, assignment_id
+        )
+
+        document = await self.document_repository.get_by_id(detail.document_id)
+        reference_text = document.raw_text if document and document.raw_text else ""
+
+        max_attempts = assignment.max_attempts or settings.STAGE2_MAX_ATTEMPTS
+        status = await self.status_repository.get_or_create(
+            student.user_id,
+            assignment_id,
+            remaining_attempts=max_attempts,
+        )
+        await self.session.commit()
+
+        highlights = await self.highlight_repository.list_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        used_attempts = len(highlights)
+        remaining = (
+            status.remaining_attempts
+            if status.remaining_attempts is not None
+            else max(0, max_attempts - used_attempts)
+        )
+
+        cleared_highlights = self._collect_cleared_highlights(highlights)
+        expected_count = detail.expected_error_count or 0
+        highlight_phase_complete = len(cleared_highlights) >= expected_count > 0
+        remaining_errors = max(0, expected_count - len(cleared_highlights))
+
+        progress_status = (
+            status.progress_status or ProgressStatus.NOT_STARTED.value
+        )
+        type_hints = self._parse_stored_hallucination_types(detail.hallucination_types)
+
+        return Stage2AssignmentDetailResponse(
+            assignment_id=assignment.assignment_id,
+            title=assignment.title or "",
+            reference_document_text=reference_text,
+            question=detail.question or "",
+            flawed_ai_response=detail.hallucinated_ai_answer or "",
+            expected_error_count=expected_count,
+            hallucination_type_options=[
+                HallucinationTypeOption(**item) for item in HALLUCINATION_TYPE_OPTIONS
+            ],
+            hallucination_type_hints=type_hints,
+            status=progress_status,
+            highlight_phase_complete=highlight_phase_complete,
+            remaining_errors_to_find=remaining_errors,
+            attempts=Stage2AttemptsDetail(
+                max_attempts=max_attempts,
+                used_attempts=used_attempts,
+                remaining_attempts=remaining,
+            ),
+            cleared_highlights=cleared_highlights,
+        )
+
     async def _get_authorized_teacher(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
@@ -203,6 +282,51 @@ class Stage2Service:
         if user.role != "TEACHER":
             raise Stage2AccessForbiddenError("접근 권한이 없습니다.")
         return user
+
+    async def _get_authorized_student(self, user_id: int) -> User:
+        user = await self.user_repository.get_by_id(user_id)
+        if user is None:
+            raise InvalidTokenError()
+        if user.role != "STUDENT":
+            raise Stage2AccessForbiddenError()
+        return user
+
+    async def _get_stage2_assignment_for_student(
+        self, student: User, assignment_id: int
+    ) -> tuple[Assignment, Stage2AssignmentDetail]:
+        assignment = await self.assignment_repository.get_by_id(assignment_id)
+        if assignment is None or assignment.stage != 2:
+            raise AssignmentNotFoundError("존재하지 않는 과제입니다.")
+        if student.class_id is None or assignment.class_id != student.class_id:
+            raise Stage2AccessForbiddenError()
+
+        detail = await self.stage2_detail_repository.get_by_assignment_id(assignment_id)
+        if detail is None:
+            raise AssignmentNotFoundError("존재하지 않는 과제입니다.")
+        return assignment, detail
+
+    @staticmethod
+    def _collect_cleared_highlights(
+        highlights: list[Stage2HighlightSubmission],
+    ) -> list[str]:
+        cleared: list[str] = []
+        seen: set[str] = set()
+        for row in highlights:
+            if not row.is_correct or not row.highlighted_text:
+                continue
+            text = row.highlighted_text.strip()
+            if text and text not in seen:
+                seen.add(text)
+                cleared.append(text)
+        return cleared
+
+    @staticmethod
+    def _parse_stored_hallucination_types(raw: list | dict | None) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return [str(item) for item in raw if item]
+        return []
 
     def _parse_hallucination_types(self, raw: str) -> list[str]:
         stripped = (raw or "").strip()

@@ -5,6 +5,7 @@
 | Method | Path | 비고 |
 |--------|------|------|
 | POST | `/teacher/assignments/step2` | multipart + mock Langflow + DB 저장 |
+| GET | `/student/assignments/{id}/step2` | 상세·문서·시도·cleared_highlights |
 
 Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JSON 배열 문자열), `expected_error_count`, `file`
 
@@ -25,6 +26,5 @@ Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JS
 
 ## 미구현 (후속)
 
-- `GET /student/assignments/{id}/step2`
 - `POST .../step2/highlight`
 - `POST .../step2/correction`
