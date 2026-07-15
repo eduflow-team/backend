@@ -379,6 +379,9 @@ def _correction_feedback(factual: int, completeness: int) -> str:
     if factual < 4:
         return "사실 관계가 문서·정답과 맞지 않습니다. 참고 문서를 다시 확인해 보세요."
     return "오류 구간이 충분히 교정되지 않았습니다. 의미가 완전히 바뀌도록 수정해 보세요."
+
+
+def _parse_json_content(content: str) -> dict:
     text = content.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
