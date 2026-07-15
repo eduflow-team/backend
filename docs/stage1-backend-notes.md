@@ -27,6 +27,8 @@ Form 필드 (create): `class_id`, `subject`, `question`, `guideline`, `default_c
 
 응답 JSON 필드는 Notion 명세와 동일. 이후 Langflow G-Eval로 점수까지 교체 가능.
 
+`submissions.is_final`: 같은 학생·과제에서 **마지막 제출 1건만** `true` (이전 것은 해제). records 대표 제출용.
+
 ## Langflow stub (AI 총괄)
 
 `AssignmentService.chat_step1` 안에서 `_mock_langflow_response`를 호출합니다.

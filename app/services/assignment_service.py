@@ -350,6 +350,10 @@ class AssignmentService:
             question=assignment.description or "",
         )
 
+        # records 대표 제출: 이전 final 해제 후 이번 제출만 is_final=True
+        await self.submission_repository.clear_final_for_user_and_assignment(
+            student.user_id, assignment_id
+        )
         submission = Submission(
             user_id=student.user_id,
             assignment_id=assignment_id,
