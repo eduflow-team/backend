@@ -2,6 +2,7 @@
 
 Langflow HTTP 호출은 AI 총괄 연동 전까지 mock 응답을 반환한다.
 검색·context·rag_process_visualization은 백엔드에서 조립한다.
+chat은 동일 chunk_size면 DB 청크 임베딩을 재사용하고, temperature는 생성에만 쓴다.
 """
 
 from __future__ import annotations
@@ -263,7 +264,7 @@ class AssignmentService:
         self, user_id: int, assignment_id: int, payload: Stage1ChatRequest
     ) -> Stage1ChatResponse:
         student = await self._get_authorized_student(user_id)
-        assignment, _detail = await self._get_stage1_assignment_for_student(
+        assignment, detail = await self._get_stage1_assignment_for_student(
             student, assignment_id
         )
         params = payload.parameters
@@ -274,31 +275,20 @@ class AssignmentService:
             raise AssignmentNotFoundError("과제 문서가 아직 준비되지 않았습니다.")
         document = documents[0]
 
-        chunks = split_text_into_chunks(document.raw_text, params.chunk_size)
-        if not chunks:
-            raise Stage1DocumentProcessingError()
-
-        query_embedding = await embed_text(payload.message)
-        # top_k가 크지 않으면 전체 청크 임베딩, 너무 많으면 상위 N만 임베딩 후 재랭킹을 단순화
-        chunk_embeddings = await embed_texts(chunks)
-
-        ranked: list[tuple[float, str]] = []
-        for text, emb in zip(chunks, chunk_embeddings, strict=True):
-            score = cosine_similarity(query_embedding, emb)
-            ranked.append((score, text))
-        ranked.sort(key=lambda item: item[0], reverse=True)
-
-        selected = ranked[: params.top_k]
-        context = "\n\n".join(text for _, text in selected)
-        best_score = selected[0][0] if selected else 0.0
-
-        visualization = RagProcessVisualization(
-            total_chunks=len(chunks),
-            retrieved_chunks=len(selected),
-            vector_search_score=round(best_score, 4),
+        default_params = self._parse_parameters(detail.default_parameters)
+        chunk_vectors = await self._load_or_build_chunk_vectors(
+            document,
+            requested_chunk_size=params.chunk_size,
+            default_chunk_size=default_params.chunk_size,
+        )
+        context, visualization = await self._search_context(
+            chunk_vectors,
+            message=payload.message,
+            top_k=params.top_k,
         )
 
         # TODO(AI 총괄): Langflow HTTP client로 message/context/temperature tweaks 연동
+        # temperature는 생성 단계에만 사용 (검색·임베딩과 분리)
         ai_response = self._mock_langflow_response(
             message=payload.message,
             context=context,
@@ -497,6 +487,117 @@ class AssignmentService:
         path = directory / safe_name
         path.write_bytes(content)
         return path
+
+    @staticmethod
+    def _chunk_size_from_metadata(metadata: dict | None) -> int | None:
+        if not metadata:
+            return None
+        raw = metadata.get("chunk_size")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _as_float_vector(embedding: object) -> list[float] | None:
+        if embedding is None:
+            return None
+        try:
+            values = [float(x) for x in list(embedding)]
+        except (TypeError, ValueError):
+            return None
+        return values or None
+
+    def _reusable_chunk_vectors_from_db(
+        self,
+        rows: list[DocumentChunk],
+        *,
+        requested_chunk_size: int,
+        default_chunk_size: int,
+    ) -> list[tuple[str, list[float]]] | None:
+        """저장된 청크 중 요청 chunk_size와 맞는 벡터만 골라 재사용한다.
+
+        - metadata.chunk_size == 요청값
+        - metadata에 chunk_size가 없으면 default_chunk_size == 요청값일 때 허용
+        """
+
+        matched: list[tuple[str, list[float]]] = []
+        for row in rows:
+            if not row.content:
+                continue
+            vector = self._as_float_vector(row.embedding)
+            if vector is None:
+                continue
+            stored_size = self._chunk_size_from_metadata(row.chunk_metadata)
+            if stored_size is not None:
+                if stored_size != requested_chunk_size:
+                    continue
+            elif default_chunk_size != requested_chunk_size:
+                continue
+            matched.append((row.content, vector))
+
+        return matched or None
+
+    async def _load_or_build_chunk_vectors(
+        self,
+        document: Document,
+        *,
+        requested_chunk_size: int,
+        default_chunk_size: int,
+    ) -> list[tuple[str, list[float]]]:
+        """동일 chunk_size면 DB 임베딩 재사용, 다르면 실시간 청킹·임베딩."""
+
+        stored = await self.chunk_repository.get_by_document_id(document.document_id)
+        reused = self._reusable_chunk_vectors_from_db(
+            stored,
+            requested_chunk_size=requested_chunk_size,
+            default_chunk_size=default_chunk_size,
+        )
+        if reused is not None:
+            logger.debug(
+                "stage1 chat: reusing %s stored chunks (chunk_size=%s)",
+                len(reused),
+                requested_chunk_size,
+            )
+            return reused
+
+        raw_text = document.raw_text or ""
+        chunks = split_text_into_chunks(raw_text, requested_chunk_size)
+        if not chunks:
+            raise Stage1DocumentProcessingError()
+        embeddings = await embed_texts(chunks)
+        return list(zip(chunks, embeddings, strict=True))
+
+    async def _search_context(
+        self,
+        chunk_vectors: list[tuple[str, list[float]]],
+        *,
+        message: str,
+        top_k: int,
+    ) -> tuple[str, RagProcessVisualization]:
+        """질문 임베딩 + cosine 정렬 후 top_k context/visualization 조립.
+
+        temperature는 사용하지 않는다.
+        """
+
+        query_embedding = await embed_text(message)
+        ranked: list[tuple[float, str]] = []
+        for text, emb in chunk_vectors:
+            score = cosine_similarity(query_embedding, emb)
+            ranked.append((score, text))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+
+        selected = ranked[:top_k]
+        context = "\n\n".join(text for _, text in selected)
+        best_score = selected[0][0] if selected else 0.0
+        visualization = RagProcessVisualization(
+            total_chunks=len(chunk_vectors),
+            retrieved_chunks=len(selected),
+            vector_search_score=round(best_score, 4),
+        )
+        return context, visualization
 
     def _mock_langflow_response(
         self, *, message: str, context: str, temperature: float

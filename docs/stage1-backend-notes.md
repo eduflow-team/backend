@@ -11,6 +11,13 @@
 
 Form 필드 (create): `class_id`, `subject`, `question`, `guideline`, `default_chunk_size`, `default_top_k`, `default_temperature`, `file`
 
+## chat 검색·생성 분리
+
+- `chunk_size`가 저장된 `document_chunks.metadata.chunk_size`(또는 default)와 같고 embedding이 있으면 **DB 재사용** (문서 재임베딩 없음)
+- 질문 임베딩 → cosine 정렬 → `top_k` slice만 수행
+- `temperature`는 생성(mock/Langflow)에만 사용
+- `chunk_size`가 다르면 실시간 청킹·임베딩 (preset 사전임베딩은 후속)
+
 ## 채점 (하이브리드 C)
 
 `submit`의 `_evaluate_response`:
