@@ -15,6 +15,21 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080
 
+    # OpenAI (문서 임베딩·질의 임베딩·채점 피드백용)
+    OPENAI_API_KEY: str = ""
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    OPENAI_EMBEDDING_DIMENSIONS: int = 768
+    OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
+
+    # Langflow (AI 총괄 연동용 — 현재 chat은 mock, 호출은 stub)
+    LANGFLOW_URL: str = "http://localhost:7860"
+    LANGFLOW_API_KEY: str = ""
+    LANGFLOW_STAGE1_CHAT_FLOW_ID: str = ""
+
+    # Stage 1 업로드 제한
+    STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
+    STAGE1_MAX_ATTEMPTS: int = 3
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

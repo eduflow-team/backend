@@ -46,3 +46,4 @@ docker-compose.override.yml
 # Media / Uploads
 storage/
 app/static/uploads/
+uploads/
