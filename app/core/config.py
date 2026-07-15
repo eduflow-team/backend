@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     STAGE2_MAX_ATTEMPTS: int = 5
     STAGE2_LOCATION_THRESHOLD: float = 0.8
     STAGE2_REASONING_THRESHOLD: float = 0.95
+    STAGE2_CORRECTION_MIN_SCORE: int = 4
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

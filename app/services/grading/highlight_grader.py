@@ -50,6 +50,15 @@ class HighlightGrader:
             return False
         return student_error_type.strip().upper() == matched_error_type.strip().upper()
 
+    def is_similar_text(self, left: str, right: str) -> bool:
+        normalized_left = _normalize(left)
+        normalized_right = _normalize(right)
+        if not normalized_left or not normalized_right:
+            return False
+        if normalized_left == normalized_right:
+            return True
+        return _overlap_score(normalized_left, normalized_right) >= settings.STAGE2_LOCATION_THRESHOLD
+
 
 def _normalize(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", (text or "").strip().lower())

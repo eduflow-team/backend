@@ -20,28 +20,39 @@ from app.core.config import settings
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage2CreateError,
+    InvalidStage2CorrectionError,
     InvalidStage2HighlightError,
     InvalidTokenError,
     Stage2AccessForbiddenError,
+    Stage2CorrectionAlreadySubmittedError,
     Stage2DocumentProcessingError,
     Stage2FileTooLargeError,
     Stage2HighlightLimitExceededError,
+    Stage2HighlightPhaseIncompleteError,
     UnsupportedStage2FileTypeError,
 )
 from app.models.assignment import Assignment
 from app.models.document import Document
 from app.models.enums import ProgressStatus
+from app.models.evaluation import Evaluation
 from app.models.stage import Stage2AssignmentDetail, Stage2ErrorAnswer
-from app.models.submission import Stage2HighlightSubmission
+from app.models.submission import (
+    Stage2CorrectionSubmission,
+    Stage2HighlightSubmission,
+    Submission,
+)
 from app.models.user import User
 from app.repositories.assignment import AssignmentRepository
 from app.repositories.document import DocumentRepository
+from app.repositories.evaluation import EvaluationRepository
 from app.repositories.stage import (
+    Stage2CorrectionRepository,
     Stage2DetailRepository,
     Stage2ErrorAnswerRepository,
     Stage2HighlightRepository,
 )
 from app.repositories.student_status import StudentAssignmentStatusRepository
+from app.repositories.submission import SubmissionRepository
 from app.repositories.user import UserRepository
 from app.schemas.stage2 import (
     ALLOWED_HALLUCINATION_TYPES,
@@ -51,6 +62,9 @@ from app.schemas.stage2 import (
     Stage2AttemptsDetail,
     Stage2CreateResponse,
     Stage2GeneratedErrorItem,
+    Step2CorrectionFeedbackDetail,
+    Step2CorrectionRequest,
+    Step2CorrectionResponse,
     Step2HighlightEvaluationReport,
     Step2HighlightRequest,
     Step2HighlightResponse,
@@ -76,6 +90,9 @@ class Stage2Service:
         self.document_repository = DocumentRepository(session)
         self.status_repository = StudentAssignmentStatusRepository(session)
         self.highlight_repository = Stage2HighlightRepository(session)
+        self.correction_repository = Stage2CorrectionRepository(session)
+        self.submission_repository = SubmissionRepository(session)
+        self.evaluation_repository = EvaluationRepository(session)
         self.langflow_client = LangflowClient()
         self.highlight_grader = HighlightGrader()
         self.geval_service = GEvalService()
@@ -423,6 +440,187 @@ class Stage2Service:
             cleared_highlights=cleared_highlights,
         )
 
+    # ------------------------------------------------------------------
+    # Student: correction submit
+    # ------------------------------------------------------------------
+
+    async def submit_correction(
+        self,
+        user_id: int,
+        assignment_id: int,
+        payload: Step2CorrectionRequest,
+    ) -> Step2CorrectionResponse:
+        student = await self._get_authorized_student(user_id)
+        assignment, detail = await self._get_stage2_assignment_for_student(
+            student, assignment_id
+        )
+
+        if not payload.corrections:
+            raise InvalidStage2CorrectionError()
+
+        existing_final = await self.submission_repository.get_final_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        prior_corrections = await self.correction_repository.list_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        if existing_final is not None or prior_corrections:
+            raise Stage2CorrectionAlreadySubmittedError()
+
+        highlights = await self.highlight_repository.list_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        cleared_highlights = self._collect_cleared_highlights(highlights)
+        expected_count = detail.expected_error_count or 0
+        if len(cleared_highlights) < expected_count:
+            raise Stage2HighlightPhaseIncompleteError()
+
+        if len(payload.corrections) != expected_count:
+            raise InvalidStage2CorrectionError(
+                "제출한 정답 개수가 과제의 오류 개수와 일치하지 않습니다."
+            )
+
+        for item in payload.corrections:
+            if not item.original_highlight.strip() or not item.student_answer.strip():
+                raise InvalidStage2CorrectionError()
+            if not self._matches_cleared_highlight(
+                item.original_highlight.strip(), cleared_highlights
+            ):
+                raise InvalidStage2CorrectionError(
+                    "original_highlight가 cleared_highlights와 일치하지 않습니다."
+                )
+
+        error_answers = await self.stage2_error_answer_repository.list_by_assignment_id(
+            assignment_id
+        )
+        document = await self.document_repository.get_by_id(detail.document_id)
+        reference_text = document.raw_text if document and document.raw_text else ""
+        flawed_text = detail.hallucinated_ai_answer or ""
+
+        feedback_details: list[Step2CorrectionFeedbackDetail] = []
+        matched_pairs: list[tuple[Stage2ErrorAnswer, str]] = []
+        passed_count = 0
+
+        for item in payload.corrections:
+            original = item.original_highlight.strip()
+            student_answer = item.student_answer.strip()
+            location_match = self.highlight_grader.match_location(original, error_answers)
+            matched_answer = (
+                location_match.answer
+                if location_match
+                and self.highlight_grader.is_location_match(location_match.overlap_score)
+                else None
+            )
+            if matched_answer is None:
+                raise InvalidStage2CorrectionError(
+                    "original_highlight에 대응하는 오류 정보를 찾을 수 없습니다."
+                )
+
+            evaluation = await self.geval_service.evaluate_correction(
+                student_answer=student_answer,
+                correct_sentence=matched_answer.correct_sentence or "",
+                original_highlight=original,
+                reference_document=reference_text,
+                hallucination_reason=matched_answer.hallucination_reason or "",
+                evidence_sentence=matched_answer.evidence_sentence or "",
+            )
+            if evaluation.is_item_passed:
+                passed_count += 1
+
+            matched_pairs.append((matched_answer, student_answer))
+            feedback_details.append(
+                Step2CorrectionFeedbackDetail(
+                    student_found_error=original,
+                    student_answer=student_answer,
+                    is_item_passed=evaluation.is_item_passed,
+                    hallucination_reason=matched_answer.hallucination_reason or "",
+                    reference_evidence=matched_answer.evidence_sentence or "",
+                    ai_feedback=evaluation.ai_feedback,
+                )
+            )
+
+        score = int(round((passed_count / expected_count) * 100)) if expected_count else 0
+        is_passed = passed_count == expected_count > 0
+        final_sentence = self._build_final_correct_sentence(flawed_text, matched_pairs)
+
+        submission = Submission(
+            user_id=student.user_id,
+            assignment_id=assignment_id,
+            stage=2,
+            submitted_answer=final_sentence,
+            current_score=score,
+            is_final=True,
+        )
+        submission = await self.submission_repository.create(submission)
+
+        for detail_item in feedback_details:
+            row = Stage2CorrectionSubmission(
+                user_id=student.user_id,
+                assignment_id=assignment_id,
+                submission_id=submission.submission_id,
+                selected_error=detail_item.student_found_error,
+                student_correction=detail_item.student_answer,
+                is_passed=detail_item.is_item_passed,
+                final_answer=final_sentence if detail_item.is_item_passed else None,
+                feedback_detail={
+                    "factual_accuracy_passed": detail_item.is_item_passed,
+                    "hallucination_reason": detail_item.hallucination_reason,
+                    "reference_evidence": detail_item.reference_evidence,
+                    "ai_feedback": detail_item.ai_feedback,
+                },
+            )
+            row = await self.correction_repository.create(row)
+
+        for highlight in highlights:
+            if highlight.is_correct:
+                highlight.submission_id = submission.submission_id
+                await self.highlight_repository.update(highlight)
+
+        found_errors = [
+            {
+                "original_highlight": item.student_found_error,
+                "student_answer": item.student_answer,
+                "is_passed": item.is_item_passed,
+                "hallucination_reason": item.hallucination_reason,
+                "reference_evidence": item.reference_evidence,
+            }
+            for item in feedback_details
+        ]
+        summary = f"{passed_count}/{expected_count} ✅" if is_passed else f"{passed_count}/{expected_count}"
+
+        evaluation_row = Evaluation(
+            submission_id=submission.submission_id,
+            total_literacy_score=score,
+            feedback=feedback_details[0].ai_feedback if feedback_details else None,
+            evaluation_metadata={
+                "found_errors": found_errors,
+                "summary": summary,
+                "stage": 2,
+            },
+        )
+        await self.evaluation_repository.create(evaluation_row)
+
+        status = await self.status_repository.get_or_create(
+            student.user_id,
+            assignment_id,
+            remaining_attempts=assignment.max_attempts or settings.STAGE2_MAX_ATTEMPTS,
+        )
+        await self.status_repository.update_progress(
+            status,
+            progress_status=ProgressStatus.COMPLETED.value,
+            best_score=score,
+            total_literacy_score=score,
+            bias_found_count=expected_count,
+        )
+        await self.session.commit()
+
+        return Step2CorrectionResponse(
+            is_passed=is_passed,
+            score=score,
+            final_correct_sentence=final_sentence,
+            feedback_details=feedback_details,
+        )
+
     async def _get_authorized_teacher(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)
         if user is None:
@@ -467,6 +665,38 @@ class Stage2Service:
                 seen.add(text)
                 cleared.append(text)
         return cleared
+
+    def _matches_cleared_highlight(self, original: str, cleared_highlights: list[str]) -> bool:
+        for cleared in cleared_highlights:
+            if self.highlight_grader.is_similar_text(original, cleared):
+                return True
+        return False
+
+    @staticmethod
+    def _build_final_correct_sentence(
+        flawed_text: str,
+        matched_pairs: list[tuple[Stage2ErrorAnswer, str]],
+    ) -> str:
+        result = flawed_text or ""
+        sorted_pairs = sorted(
+            matched_pairs,
+            key=lambda pair: pair[0].start_index or 0,
+            reverse=True,
+        )
+        for answer, student_answer in sorted_pairs:
+            start = answer.start_index
+            end = answer.end_index
+            if (
+                start is not None
+                and end is not None
+                and 0 <= start < end <= len(result)
+            ):
+                result = result[:start] + student_answer + result[end:]
+                continue
+            error_sentence = answer.error_sentence or ""
+            if error_sentence and error_sentence in result:
+                result = result.replace(error_sentence, student_answer, 1)
+        return result.strip()
 
     @staticmethod
     def _parse_stored_hallucination_types(raw: list | dict | None) -> list[str]:

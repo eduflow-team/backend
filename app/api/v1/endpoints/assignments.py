@@ -15,6 +15,8 @@ from app.schemas.dashboard import ErrorDetail
 from app.schemas.stage2 import (
     Stage2AssignmentDetailResponse,
     Stage2CreateResponse,
+    Step2CorrectionRequest,
+    Step2CorrectionResponse,
     Step2HighlightRequest,
     Step2HighlightResponse,
 )
@@ -127,9 +129,26 @@ async def submit_step2_highlight(
     return await Stage2Service(db).submit_highlight(user_id, id, payload)
 
 
-@router.post("/student/assignments/{id}/step2/correction", summary="빈칸 정답 수정 제출")
-def submit_step2_correction(id: int):
-    return {"status": "success", "data": {}}
+@router.post(
+    "/student/assignments/{id}/step2/correction",
+    summary="빈칸 정답 수정 제출",
+    status_code=status.HTTP_200_OK,
+    response_model=Step2CorrectionResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+    },
+)
+async def submit_step2_correction(
+    id: int,
+    payload: Step2CorrectionRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Step2CorrectionResponse:
+    return await Stage2Service(db).submit_correction(user_id, id, payload)
 
 
 @router.post(

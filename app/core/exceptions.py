@@ -299,6 +299,27 @@ class Stage2HighlightLimitExceededError(DomainException):
     )
 
 
+class InvalidStage2CorrectionError(DomainException):
+    """2단계 correction 제출 데이터가 누락되었거나 형식이 올바르지 않을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "제출할 정답 데이터(corrections)가 누락되었습니다."
+
+
+class Stage2HighlightPhaseIncompleteError(DomainException):
+    """하이라이트 단계 미완료 시 correction 제출 불가 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "하이라이트 단계를 먼저 완료해야 합니다."
+
+
+class Stage2CorrectionAlreadySubmittedError(DomainException):
+    """2단계 correction 이미 최종 제출 완료 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "이미 최종 정답을 제출하여 더 이상 수정할 수 없습니다."
+
+
 class Stage2LangflowServiceUnavailableError(DomainException):
     """Langflow 2단계 생성 파이프라인 장애·타임아웃 시 발생 (503)."""
 

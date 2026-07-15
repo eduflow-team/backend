@@ -7,6 +7,7 @@
 | POST | `/teacher/assignments/step2` | multipart + mock Langflow + DB 저장 |
 | GET | `/student/assignments/{id}/step2` | 상세·문서·시도·cleared_highlights |
 | POST | `/student/assignments/{id}/step2/highlight` | 하이브리드 채점 + `stage2_highlight_submissions` 저장 |
+| POST | `/student/assignments/{id}/step2/correction` | G-Eval 수정문 채점 + 최종 제출 1회 |
 
 Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JSON 배열 문자열), `expected_error_count`, `file`
 
@@ -17,7 +18,14 @@ Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JS
 - **판정**: 3조건 AND → `is_correct`
 - `OPENAI_API_KEY` 없으면 G-Eval fallback(키워드 겹침) — smoke test용
 
-환경변수: `STAGE2_LOCATION_THRESHOLD`, `STAGE2_REASONING_THRESHOLD` (기본 0.8 / 0.95)
+## Correction 채점 (`GEvalService`)
+
+- 선행: `highlight_phase_complete=true`, `corrections.length` = `expected_error_count`
+- **G-Eval**: `factual_accuracy` + `completeness` 각 ≥ 4/5 (`STAGE2_CORRECTION_MIN_SCORE`)
+- 저장: `submissions`(is_final), `stage2_correction_submissions`, `evaluations`, `student_assignment_status` COMPLETED
+- **1회성** 재제출 → 403
+
+환경변수: `STAGE2_LOCATION_THRESHOLD`, `STAGE2_REASONING_THRESHOLD`, `STAGE2_CORRECTION_MIN_SCORE`
 
 ## Langflow stub (AI 총괄)
 
@@ -34,6 +42,4 @@ Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JS
 3. `stage2_assignment_details`
 4. `stage2_error_answers`
 
-## 미구현 (후속)
-
-- `POST .../step2/correction`
+## Stage2 API 4개 구현 완료

@@ -116,3 +116,28 @@ class Step2HighlightResponse(BaseModel):
     results: list[Step2HighlightResultItem]
     attempts: Stage2AttemptsDetail
     cleared_highlights: list[str]
+
+
+class Step2CorrectionItem(BaseModel):
+    original_highlight: str = Field(..., min_length=1)
+    student_answer: str = Field(..., min_length=1)
+
+
+class Step2CorrectionRequest(BaseModel):
+    corrections: list[Step2CorrectionItem] = Field(..., min_length=1)
+
+
+class Step2CorrectionFeedbackDetail(BaseModel):
+    student_found_error: str
+    student_answer: str
+    is_item_passed: bool
+    hallucination_reason: str
+    reference_evidence: str
+    ai_feedback: str
+
+
+class Step2CorrectionResponse(BaseModel):
+    is_passed: bool
+    score: int
+    final_correct_sentence: str
+    feedback_details: list[Step2CorrectionFeedbackDetail]
