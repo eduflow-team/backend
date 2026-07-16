@@ -76,7 +76,10 @@ type: 작업 내용
 - **Repository 보호 설정 (Branch Protection)** : `main` 및 `develop` 브랜치는 직접 Push가 불가능하도록 설정하며, 반드시 PR을 통해서만 코드가 반영되도록 강제합니다.
 - **PR 생성 및 리뷰어 지정** : PR 생성 시 본인을 제외한 팀원들을 리뷰어로 지정합니다. 요청 전, 'Files changed' 탭에서 셀프 리뷰를 진행하여 불필요한 주석이나 디버깅용 코드(`print` 등)를 제거합니다.
 - **리뷰 및 머지 조건** : 최소 1명 이상의 팀원에게 Approve(승인)를 받아야 머지가 가능합니다. 변경 사항이 200~400줄 이내가 되도록 자주 쪼개어 PR을 생성하는 것을 권장합니다.
-- **머지 방식 (Merge Strategy)** : 커밋 로그를 깔끔하게 유지하기 위해 자잘한 작업 커밋들은 하나로 묶어 머지하는 **Squash and merge** 방식을 기본으로 사용합니다.
+- **머지 방식 (Merge Strategy)** : 대상 브랜치에 따라 방식을 구분합니다.
+  - **`develop` ← 작업 브랜치** (`feat/*`, `fix/*`): **Squash and merge** — develop 히스토리를 한 줄 단위로 유지
+  - **`main` ← `develop`**: **Create a merge commit** (일반 merge) — develop 통합 단위를 merge commit으로 보존
+  - 그 외 `main` ← 작업 브랜치 등 예외 케이스는 팀 합의 후 진행
 
 ### 🧹 로컬 브랜치 수시 정리
 
