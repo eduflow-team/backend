@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Stage 1 업로드 제한
     STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
     STAGE1_MAX_ATTEMPTS: int = 3
+    # chat/create에서 허용하는 chunk_size (업로드 시 전부에 전부 임베딩)
+    STAGE1_CHUNK_SIZE_PRESETS: tuple[int, ...] = (50, 200, 500, 1200, 3000)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
