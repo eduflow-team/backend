@@ -4,9 +4,12 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
+from app.core.config import settings
+
 
 class Stage1Parameters(BaseModel):
-    chunk_size: int = Field(..., ge=50, le=4000)
+    # 허용값은 settings.STAGE1_CHUNK_SIZE_PRESETS — 서비스에서 400으로 검증
+    chunk_size: int
     top_k: int = Field(..., ge=1, le=50)
     temperature: float = Field(..., ge=0.0, le=1.0)
 
@@ -38,6 +41,7 @@ class Stage1ChatResponse(BaseModel):
 class Stage1SubmitRequest(BaseModel):
     final_parameters: Stage1Parameters
     selected_ai_response: str = Field(..., min_length=1)
+    student_prompt: str = Field(..., min_length=1)
 
     @field_validator("selected_ai_response")
     @classmethod
@@ -45,6 +49,14 @@ class Stage1SubmitRequest(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("selected_ai_response는 비어 있을 수 없습니다.")
+        return stripped
+
+    @field_validator("student_prompt")
+    @classmethod
+    def strip_student_prompt(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("student_prompt는 비어 있을 수 없습니다.")
         return stripped
 
 
@@ -104,6 +116,7 @@ class Stage1CreateResponse(BaseModel):
 PARAMETER_EXPLANATIONS = Stage1ParameterExplanations(
     chunk_size=(
         "업로드된 문서를 잘게 나누는 단위입니다. "
+        f"허용 값: {', '.join(str(v) for v in settings.STAGE1_CHUNK_SIZE_PRESETS)}. "
         "너무 크면 관련 없는 내용이, 작으면 맥락이 잘릴 수 있습니다."
     ),
     top_k=(
