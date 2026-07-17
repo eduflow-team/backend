@@ -18,8 +18,8 @@ from app.core.exceptions import Stage2LangflowServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_GEN = "Prompt-s2gen"
-_PROMPT_EXT = "Prompt-s2ext"
+_PROMPT_GEN = "Prompt-fwk9l"
+_PROMPT_EXT = "Prompt-We0Ob"
 
 
 @dataclass
