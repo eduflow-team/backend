@@ -244,3 +244,86 @@ class InvalidStage1SubmitError(DomainException):
 
     status_code = status.HTTP_400_BAD_REQUEST
     default_message = "제출 데이터가 누락되었거나 형식이 올바르지 않습니다."
+
+
+class Stage2AccessForbiddenError(DomainException):
+    """2단계 과제 API를 role·학급 권한이 없는 계정으로 접근할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "접근 권한이 없습니다."
+
+
+class InvalidStage2CreateError(DomainException):
+    """2단계 과제 생성 시 필수 필드가 누락됐을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "필수 파라미터(문서 파일, 페르소나, 환각 타입 등)가 누락되었습니다."
+
+
+class UnsupportedStage2FileTypeError(DomainException):
+    """지원하지 않는 문서 형식으로 2단계 과제를 생성할 때 발생 (415)."""
+
+    status_code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    default_message = "지원하지 않는 파일 형식입니다."
+
+
+class Stage2FileTooLargeError(DomainException):
+    """2단계 과제 문서 용량이 제한을 초과할 때 발생 (413)."""
+
+    status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    default_message = "파일 용량이 제한을 초과했습니다."
+
+
+class Stage2DocumentProcessingError(DomainException):
+    """2단계 문서 텍스트 추출 중 서버 오류가 발생했을 때 (500)."""
+
+    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    default_message = "서버 내부 오류가 발생했습니다."
+
+
+class InvalidStage2HighlightError(DomainException):
+    """2단계 하이라이트 제출 데이터가 누락되었거나 형식이 올바르지 않을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = (
+        "제출할 하이라이트 데이터(submissions)가 누락되었거나 형식이 올바르지 않습니다."
+    )
+
+
+class Stage2HighlightLimitExceededError(DomainException):
+    """2단계 하이라이트 시도 횟수(5회)를 초과했을 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = (
+        "최대 시도 횟수(5회)를 모두 소진하여 더 이상 과제를 제출할 수 없습니다."
+    )
+
+
+class InvalidStage2CorrectionError(DomainException):
+    """2단계 correction 제출 데이터가 누락되었거나 형식이 올바르지 않을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "제출할 정답 데이터(corrections)가 누락되었습니다."
+
+
+class Stage2HighlightPhaseIncompleteError(DomainException):
+    """하이라이트 단계 미완료 시 correction 제출 불가 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "하이라이트 단계를 먼저 완료해야 합니다."
+
+
+class Stage2CorrectionAlreadySubmittedError(DomainException):
+    """2단계 correction 이미 최종 제출 완료 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "이미 최종 정답을 제출하여 더 이상 수정할 수 없습니다."
+
+
+class Stage2LangflowServiceUnavailableError(DomainException):
+    """Langflow 2단계 생성 파이프라인 장애·타임아웃 시 발생 (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_message = (
+        "AI 답변 생성 서비스에 일시적 장애가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    )

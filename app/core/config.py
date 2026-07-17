@@ -25,12 +25,20 @@ class Settings(BaseSettings):
     LANGFLOW_URL: str = "http://localhost:7860"
     LANGFLOW_API_KEY: str = ""
     LANGFLOW_STAGE1_CHAT_FLOW_ID: str = ""
+    LANGFLOW_STAGE2_FLOW_ID: str = ""
 
     # Stage 1 업로드 제한
     STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
     STAGE1_MAX_ATTEMPTS: int = 3
     # chat/create에서 허용하는 chunk_size (업로드 시 전부에 전부 임베딩)
     STAGE1_CHUNK_SIZE_PRESETS: tuple[int, ...] = (50, 200, 500, 1200, 3000)
+
+    # Stage 2
+    STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
+    STAGE2_MAX_ATTEMPTS: int = 5
+    STAGE2_LOCATION_THRESHOLD: float = 0.8
+    STAGE2_REASONING_THRESHOLD: float = 0.95
+    STAGE2_CORRECTION_MIN_SCORE: int = 4
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

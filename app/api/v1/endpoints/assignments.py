@@ -12,7 +12,16 @@ from app.schemas.assignments import (
     Stage1SubmitResponse,
 )
 from app.schemas.dashboard import ErrorDetail
+from app.schemas.stage2 import (
+    Stage2AssignmentDetailResponse,
+    Stage2CreateResponse,
+    Step2CorrectionRequest,
+    Step2CorrectionResponse,
+    Step2HighlightRequest,
+    Step2HighlightResponse,
+)
 from app.services.assignment_service import AssignmentService
+from app.services.stage2_service import Stage2Service
 
 router = APIRouter()
 
@@ -79,19 +88,67 @@ async def submit_step1_assignment(
     return await AssignmentService(db).submit_step1(user_id, id, payload)
 
 
-@router.get("/student/assignments/{id}/step2", summary="2단계 과제 상세")
-def get_step2_assignment(id: int):
-    return {"status": "success", "data": {}}
+@router.get(
+    "/student/assignments/{id}/step2",
+    summary="2단계 과제 상세",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage2AssignmentDetailResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step2_assignment(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2AssignmentDetailResponse:
+    return await Stage2Service(db).get_step2_assignment(user_id, id)
 
 
-@router.post("/student/assignments/{id}/step2/highlight", summary="오답 하이라이트 제출")
-def submit_step2_highlight(id: int):
-    return {"status": "success", "data": {}}
+@router.post(
+    "/student/assignments/{id}/step2/highlight",
+    summary="오답 하이라이트 제출",
+    status_code=status.HTTP_200_OK,
+    response_model=Step2HighlightResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+    },
+)
+async def submit_step2_highlight(
+    id: int,
+    payload: Step2HighlightRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Step2HighlightResponse:
+    return await Stage2Service(db).submit_highlight(user_id, id, payload)
 
 
-@router.post("/student/assignments/{id}/step2/correction", summary="빈칸 정답 수정 제출")
-def submit_step2_correction(id: int):
-    return {"status": "success", "data": {}}
+@router.post(
+    "/student/assignments/{id}/step2/correction",
+    summary="빈칸 정답 수정 제출",
+    status_code=status.HTTP_200_OK,
+    response_model=Step2CorrectionResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+    },
+)
+async def submit_step2_correction(
+    id: int,
+    payload: Step2CorrectionRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Step2CorrectionResponse:
+    return await Stage2Service(db).submit_correction(user_id, id, payload)
 
 
 @router.post(
@@ -133,6 +190,42 @@ async def create_step1_assignment(
     )
 
 
-@router.post("/teacher/assignments/step2", summary="2단계 과제 생성")
-def create_step2_assignment():
-    return {"status": "success", "data": {}}
+@router.post(
+    "/teacher/assignments/step2",
+    summary="2단계 과제 생성",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Stage2CreateResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        413: {"model": ErrorDetail},
+        415: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
+)
+async def create_step2_assignment(
+    title: str = Form(...),
+    subject: str = Form(...),
+    question: str = Form(...),
+    persona: str = Form(..., max_length=100),
+    hallucination_types: str = Form(
+        ...,
+        description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
+    ),
+    expected_error_count: int = Form(..., ge=1, le=5),
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2CreateResponse:
+    return await Stage2Service(db).create_step2_assignment(
+        user_id,
+        title=title,
+        subject=subject,
+        question=question,
+        persona=persona,
+        hallucination_types_raw=hallucination_types,
+        expected_error_count=expected_error_count,
+        file=file,
+    )
