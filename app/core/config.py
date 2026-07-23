@@ -21,11 +21,15 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_DIMENSIONS: int = 768
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
 
-    # Langflow (AI 총괄 연동용 — 현재 chat은 mock, 호출은 stub)
+    # Langflow
     LANGFLOW_URL: str = "http://localhost:7860"
     LANGFLOW_API_KEY: str = ""
     LANGFLOW_STAGE1_CHAT_FLOW_ID: str = ""
+    LANGFLOW_STAGE1_PROMPT_NODE_ID: str = ""
+    LANGFLOW_STAGE1_MODEL_NODE_ID: str = ""
     LANGFLOW_STAGE2_FLOW_ID: str = ""
+    LANGFLOW_STAGE2_GEN_PROMPT_NODE_ID: str = ""
+    LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID: str = ""
 
     # Stage 1 업로드 제한
     STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
