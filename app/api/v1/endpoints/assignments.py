@@ -115,7 +115,7 @@ async def create_step1_assignment(
     guideline: str = Form(...),
     default_chunk_size: int = Form(200),
     default_top_k: int = Form(2),
-    default_temperature: float = Form(0.9),
+    default_temperature: float = Form(1.0),
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),

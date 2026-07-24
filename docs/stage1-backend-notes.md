@@ -11,6 +11,8 @@
 
 Form 필드 (create): `class_id`, `subject`, `question`, `guideline`, `default_chunk_size`, `default_top_k`, `default_temperature`, `file`
 
+첫 화면/과제 default: `chunk_size=200`, `top_k=2`, **`temperature=1.0`** (첫 답 환각 체감용). 이후 학생이 조절한 값을 그대로 사용.
+
 submit Body: `final_parameters`, `selected_ai_response`, `student_prompt` (필수)
 
 ---
