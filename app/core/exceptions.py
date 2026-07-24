@@ -244,3 +244,12 @@ class InvalidStage1SubmitError(DomainException):
 
     status_code = status.HTTP_400_BAD_REQUEST
     default_message = "제출 데이터가 누락되었거나 형식이 올바르지 않습니다."
+
+
+class Stage1LangflowServiceUnavailableError(DomainException):
+    """Langflow 1단계 RAG chat 생성 장애·타임아웃 시 발생 (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_message = (
+        "AI 답변 생성 서비스에 일시적 장애가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    )

@@ -46,6 +46,7 @@ async def get_step1_assignment(
         401: {"model": ErrorDetail},
         403: {"model": ErrorDetail},
         404: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
         504: {"model": ErrorDetail},
     },
 )

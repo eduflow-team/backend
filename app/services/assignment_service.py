@@ -1,7 +1,7 @@
 """Stage 1 과제 도메인 비즈니스 로직.
 
-Langflow HTTP 호출은 AI 총괄 연동 전까지 mock 응답을 반환한다.
-검색·context·rag_process_visualization은 백엔드에서 조립한다.
+검색·context·rag_process_visualization은 백엔드에서 조립하고,
+생성(ai_response)은 LangflowClient가 담당한다.
 chat은 동일 chunk_size면 DB 청크 임베딩을 재사용하고, temperature는 생성에만 쓴다.
 """
 
@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
 from app.core.exceptions import (
     AssignmentNotFoundError,
@@ -88,6 +89,7 @@ class AssignmentService:
         self.attempt_repository = Stage1AttemptRepository(session)
         self.submission_repository = SubmissionRepository(session)
         self.evaluation_repository = EvaluationRepository(session)
+        self.langflow_client = LangflowClient()
 
     # ------------------------------------------------------------------
     # Teacher: create
@@ -287,9 +289,8 @@ class AssignmentService:
             top_k=params.top_k,
         )
 
-        # TODO(AI 총괄): Langflow HTTP client로 message/context/temperature tweaks 연동
         # temperature는 생성 단계에만 사용 (검색·임베딩과 분리)
-        ai_response = self._mock_langflow_response(
+        ai_response = await self.langflow_client.run_stage1_chat(
             message=payload.message,
             context=context,
             temperature=params.temperature,
@@ -626,34 +627,6 @@ class AssignmentService:
             retrieved_chunk_previews=previews,
         )
         return context, visualization
-
-    def _mock_langflow_response(
-        self, *, message: str, context: str, temperature: float
-    ) -> str:
-        """Langflow 연동 전 placeholder.
-
-        검색된 context만 사용해 답한다. temperature는 문장 길이/풀어쓰기만 조절한다.
-        """
-
-        snippets = [s.strip() for s in re.split(r"\n{2,}", context) if s.strip()]
-        if not snippets:
-            return (
-                f"질문('{message}')에 대해 검색된 학습 자료에서 확인할 수 있는 내용이 없습니다."
-            )
-
-        lines = [
-            f"질문('{message}')에 대해 검색된 자료만 근거로 답변합니다.",
-            *snippets[:3],
-        ]
-        if temperature >= 0.7 and len(snippets) > 1:
-            # 고온: 같은 자료 문장을 더 풀어 씀 (자료 밖 사실 추가 금지)
-            lines.append(
-                "위 내용을 학생 눈높이에 맞춰 다시 정리하면, 검색된 자료에 나온 사실만 "
-                "중심으로 이해할 수 있습니다."
-            )
-        elif temperature <= 0.2:
-            lines.append("자료에 없는 내용은 단정하지 않았습니다.")
-        return " ".join(lines)
 
     async def _evaluate_response(
         self,
