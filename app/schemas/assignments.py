@@ -31,6 +31,8 @@ class RagProcessVisualization(BaseModel):
     total_chunks: int
     retrieved_chunks: int
     vector_search_score: float
+    # 학생이 답과 대조할 수 있도록 검색된 청크 본문(순서=유사도 높은 순)
+    retrieved_chunk_previews: list[str] = Field(default_factory=list)
 
 
 class Stage1ChatResponse(BaseModel):

@@ -6,14 +6,42 @@
 |--------|------|------|
 | POST | `/teacher/assignments/step1` | multipart + preset 5종 병렬 임베딩 → `document_chunks` |
 | GET | `/student/assignments/{id}/step1` | 상세·시도·최고점 |
-| POST | `/student/assignments/{id}/step1/chat` | 검색·context·visualization 조립, **ai_response는 mock** |
+| POST | `/student/assignments/{id}/step1/chat` | 검색·context·visualization(+청크 preview) 조립, ai_response는 mock→Langflow |
 | POST | `/student/assignments/{id}/step1/submit` | 시도 제한 3회 + 하이브리드 채점 + `student_prompt` 저장 |
 
 Form 필드 (create): `class_id`, `subject`, `question`, `guideline`, `default_chunk_size`, `default_top_k`, `default_temperature`, `file`
 
-첫 화면/과제 default: `chunk_size=200`, `top_k=2`, **`temperature=1.0`** (첫 답 환각 체감용). 이후 학생이 조절한 값을 그대로 사용.
+첫 화면/과제 default: `chunk_size=200`, `top_k=2`, **`temperature=1.0`**.  
+자료에 더 충실한 탐색 예: `chunk_size=1200`, `top_k=5`, `temperature=0~0.2`.
 
 submit Body: `final_parameters`, `selected_ai_response`, `student_prompt` (필수)
+
+chat 응답 `rag_process_visualization`:
+
+- `total_chunks`, `retrieved_chunks`, `vector_search_score`
+- **`retrieved_chunk_previews`**: 검색된 청크 본문 배열 (유사도 높은 순) — 학생이 답과 대조
+
+---
+
+## 과제 질문 가이드 (필수)
+
+`question` / 학생 `message`는 **업로드 PDF에 실제로 있는 주제**여야 한다.  
+문서에 없는 질문(예: 삼사인데 자료가 조선후기 탕평·균역만 다룸)이면 어떤 파라미터도 “좋은 답”이 나올 수 없다.
+
+데모 예 (`조선후기의 정치` PDF):
+
+- 영조대 완론탕평과 정조대 준론탕평의 차이는?
+- 균역법의 목적과 양인 부담 변화는?
+- 세도정치 성립 배경과 주요 가문은?
+
+---
+
+## 생성 정책 (AI 프롬프트와 맞춤)
+
+- Stage1 목표는 **검색이 좋아질수록 답이 자료에 가까워지게** 하는 것
+- Langflow 프롬프트: 자료만 근거 / 없으면 모른다고 / 창작 금지 / 문장 수 강제 없음
+- `temperature`는 문체만 조절 (새 사실 추가 금지). 의도적 환각 체험은 Stage2
+- ai 레포: `prompts/stage1/rag-chat.md` — Langflow에 반영 후 flow 재저장 필요
 
 ---
 
@@ -64,7 +92,7 @@ submit Body: `final_parameters`, `selected_ai_response`, `student_prompt` (필�
 
 ## Langflow stub (AI 총괄)
 
-`AssignmentService.chat_step1` 안에서 `_mock_langflow_response`를 호출합니다.
+`AssignmentService.chat_step1` 안에서 `_mock_langflow_response`를 호출합니다 (Flow ID 미설정 시).
 
 교체 시 연결할 값:
 - `message` ← request.message

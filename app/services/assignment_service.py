@@ -616,12 +616,14 @@ class AssignmentService:
         ranked.sort(key=lambda item: item[0], reverse=True)
 
         selected = ranked[:top_k]
-        context = "\n\n".join(text for _, text in selected)
+        previews = [text.strip() for _, text in selected if text.strip()]
+        context = "\n\n".join(previews)
         best_score = selected[0][0] if selected else 0.0
         visualization = RagProcessVisualization(
             total_chunks=len(chunk_vectors),
             retrieved_chunks=len(selected),
             vector_search_score=round(best_score, 4),
+            retrieved_chunk_previews=previews,
         )
         return context, visualization
 
@@ -630,33 +632,27 @@ class AssignmentService:
     ) -> str:
         """Langflow 연동 전 placeholder.
 
-        context가 있으면 요약형으로 재작성하고, temperature가 높으면 추측 문장을 덧붙인다.
+        검색된 context만 사용해 답한다. temperature는 문장 길이/풀어쓰기만 조절한다.
         """
 
         snippets = [s.strip() for s in re.split(r"\n{2,}", context) if s.strip()]
-        base_parts = snippets[:3] if snippets else ["제공된 학습 자료에서 관련 내용을 찾지 못했습니다."]
-        lines = [
-            f"질문('{message}')에 대해 검색된 자료를 바탕으로 답변합니다.",
-            *base_parts,
-        ]
-        # 10문장 이상을 맞추기 위한 확장 (체험용 mock)
-        fillers = [
-            "위 내용은 검색된 청크를 중심으로 정리한 것입니다.",
-            "파라미터가 달라지면 검색 범위와 답변 톤도 함께 달라질 수 있습니다.",
-            "학습 자료에 나온 사실을 우선적으로 언급했습니다.",
-            "학생이 이해하기 쉬운 문장으로 풀어 썼습니다.",
-            "추가 질문은 같은 자료 범위에서 다시 검색할 수 있습니다.",
-            "자료에 없는 세부 일화는 온도가 높을 때 더 쉽게 섞일 수 있습니다.",
-            "실제 운영에서는 Langflow가 이 구간을 생성합니다.",
-        ]
-        while len(lines) < 10:
-            lines.append(fillers[(len(lines) - 1) % len(fillers)])
-
-        if temperature >= 0.7:
-            lines.append(
-                "참고로 자료에 직접 나오지 않은 배경 이야기도 섞어 설명할 수 있습니다. "
-                "(고온 mock)"
+        if not snippets:
+            return (
+                f"질문('{message}')에 대해 검색된 학습 자료에서 확인할 수 있는 내용이 없습니다."
             )
+
+        lines = [
+            f"질문('{message}')에 대해 검색된 자료만 근거로 답변합니다.",
+            *snippets[:3],
+        ]
+        if temperature >= 0.7 and len(snippets) > 1:
+            # 고온: 같은 자료 문장을 더 풀어 씀 (자료 밖 사실 추가 금지)
+            lines.append(
+                "위 내용을 학생 눈높이에 맞춰 다시 정리하면, 검색된 자료에 나온 사실만 "
+                "중심으로 이해할 수 있습니다."
+            )
+        elif temperature <= 0.2:
+            lines.append("자료에 없는 내용은 단정하지 않았습니다.")
         return " ".join(lines)
 
     async def _evaluate_response(
