@@ -1,7 +1,6 @@
 """Langflow HTTP 클라이언트.
 
-`LANGFLOW_STAGE2_FLOW_ID`가 비어 있으면 mock 응답을 반환한다.
-실제 HTTP 연동은 AI 담당이 handoff 후 교체한다.
+`LANGFLOW_STAGE*_FLOW_ID`가 비어 있으면 mock 응답을 반환한다.
 """
 
 from __future__ import annotations
@@ -14,12 +13,12 @@ from dataclasses import dataclass
 import httpx
 
 from app.core.config import settings
-from app.core.exceptions import Stage2LangflowServiceUnavailableError
+from app.core.exceptions import (
+    Stage1LangflowServiceUnavailableError,
+    Stage2LangflowServiceUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
-
-_PROMPT_GEN = "Prompt-fwk9l"
-_PROMPT_EXT = "Prompt-We0Ob"
 
 
 @dataclass
@@ -29,6 +28,114 @@ class Stage2LangflowResult:
 
 
 class LangflowClient:
+    async def run_stage1_chat(
+        self,
+        *,
+        message: str,
+        context: str,
+        temperature: float,
+    ) -> str:
+        if settings.LANGFLOW_STAGE1_CHAT_FLOW_ID.strip():
+            return await self._run_stage1_http(
+                message=message,
+                context=context,
+                temperature=temperature,
+            )
+        return self._mock_stage1_chat(
+            message=message,
+            context=context,
+            temperature=temperature,
+        )
+
+    async def _run_stage1_http(
+        self,
+        *,
+        message: str,
+        context: str,
+        temperature: float,
+    ) -> str:
+        prompt_node_id = settings.LANGFLOW_STAGE1_PROMPT_NODE_ID.strip()
+        model_node_id = settings.LANGFLOW_STAGE1_MODEL_NODE_ID.strip()
+        if not prompt_node_id or not model_node_id:
+            raise Stage1LangflowServiceUnavailableError()
+
+        payload = {
+            "input_value": message,
+            "input_type": "chat",
+            "output_type": "chat",
+            "tweaks": {
+                prompt_node_id: {"context": context},
+                model_node_id: {"temperature": temperature},
+            },
+        }
+        url = (
+            f"{settings.LANGFLOW_URL.rstrip('/')}"
+            f"/api/v1/run/{settings.LANGFLOW_STAGE1_CHAT_FLOW_ID}"
+        )
+        headers = {"Content-Type": "application/json"}
+        if settings.LANGFLOW_API_KEY:
+            headers["x-api-key"] = settings.LANGFLOW_API_KEY
+
+        try:
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            logger.exception("stage1 langflow HTTP failed")
+            raise Stage1LangflowServiceUnavailableError() from exc
+
+        text = self._parse_chat_output(data)
+        if not text:
+            raise Stage1LangflowServiceUnavailableError()
+        return text
+
+    def _parse_chat_output(self, data: dict) -> str:
+        texts: list[str] = []
+        for run_output in data.get("outputs", []):
+            for inner in run_output.get("outputs", []):
+                results = inner.get("results", {})
+                message = results.get("message") or results.get("text")
+                if isinstance(message, dict) and message.get("text"):
+                    texts.append(str(message["text"]))
+                elif isinstance(message, str) and message.strip():
+                    texts.append(message)
+        return texts[-1].strip() if texts else ""
+
+    def _mock_stage1_chat(
+        self, *, message: str, context: str, temperature: float
+    ) -> str:
+        """Langflow Flow ID 미설정 시 placeholder."""
+
+        snippets = [s.strip() for s in re.split(r"\n{2,}", context) if s.strip()]
+        base_parts = (
+            snippets[:3]
+            if snippets
+            else ["제공된 학습 자료에서 관련 내용을 찾지 못했습니다."]
+        )
+        lines = [
+            f"질문('{message}')에 대해 검색된 자료를 바탕으로 답변합니다.",
+            *base_parts,
+        ]
+        fillers = [
+            "위 내용은 검색된 청크를 중심으로 정리한 것입니다.",
+            "파라미터가 달라지면 검색 범위와 답변 톤도 함께 달라질 수 있습니다.",
+            "학습 자료에 나온 사실을 우선적으로 언급했습니다.",
+            "학생이 이해하기 쉬운 문장으로 풀어 썼습니다.",
+            "추가 질문은 같은 자료 범위에서 다시 검색할 수 있습니다.",
+            "자료에 없는 세부 일화는 온도가 높을 때 더 쉽게 섞일 수 있습니다.",
+            "실제 운영에서는 Langflow가 이 구간을 생성합니다.",
+        ]
+        while len(lines) < 10:
+            lines.append(fillers[(len(lines) - 1) % len(fillers)])
+
+        if temperature >= 0.7:
+            lines.append(
+                "참고로 자료에 직접 나오지 않은 배경 이야기도 섞어 설명할 수 있습니다. "
+                "(고온 mock)"
+            )
+        return "\n".join(lines)
+
     async def run_stage2_hallucination(
         self,
         *,
@@ -63,6 +170,11 @@ class LangflowClient:
         hallucination_types: list[str],
         expected_error_count: int,
     ) -> Stage2LangflowResult:
+        gen_prompt_node_id = settings.LANGFLOW_STAGE2_GEN_PROMPT_NODE_ID.strip()
+        ext_prompt_node_id = settings.LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID.strip()
+        if not gen_prompt_node_id or not ext_prompt_node_id:
+            raise Stage2LangflowServiceUnavailableError()
+
         types_str = ", ".join(hallucination_types)
         count_str = str(expected_error_count)
         shared = {
@@ -73,8 +185,12 @@ class LangflowClient:
         payload = {
             "input_value": "",
             "tweaks": {
-                _PROMPT_GEN: {**shared, "question": question, "persona": persona},
-                _PROMPT_EXT: shared,
+                gen_prompt_node_id: {
+                    **shared,
+                    "question": question,
+                    "persona": persona,
+                },
+                ext_prompt_node_id: shared,
             },
         }
         url = (

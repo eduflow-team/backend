@@ -320,6 +320,15 @@ class Stage2CorrectionAlreadySubmittedError(DomainException):
     default_message = "이미 최종 정답을 제출하여 더 이상 수정할 수 없습니다."
 
 
+class Stage1LangflowServiceUnavailableError(DomainException):
+    """Langflow 1단계 RAG chat 생성 장애·타임아웃 시 발생 (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_message = (
+        "AI 답변 생성 서비스에 일시적 장애가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    )
+
+
 class Stage2LangflowServiceUnavailableError(DomainException):
     """Langflow 2단계 생성 파이프라인 장애·타임아웃 시 발생 (503)."""
 

@@ -1,7 +1,7 @@
 """Stage 1 과제 도메인 비즈니스 로직.
 
-Langflow HTTP 호출은 AI 총괄 연동 전까지 mock 응답을 반환한다.
-검색·context·rag_process_visualization은 백엔드에서 조립한다.
+검색·context·rag_process_visualization은 백엔드에서 조립하고,
+생성(ai_response)은 LangflowClient가 담당한다.
 chat은 동일 chunk_size면 DB 청크 임베딩을 재사용하고, temperature는 생성에만 쓴다.
 """
 
@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
 from app.core.exceptions import (
     AssignmentNotFoundError,
@@ -88,6 +89,7 @@ class AssignmentService:
         self.attempt_repository = Stage1AttemptRepository(session)
         self.submission_repository = SubmissionRepository(session)
         self.evaluation_repository = EvaluationRepository(session)
+        self.langflow_client = LangflowClient()
 
     # ------------------------------------------------------------------
     # Teacher: create
@@ -287,9 +289,8 @@ class AssignmentService:
             top_k=params.top_k,
         )
 
-        # TODO(AI 총괄): Langflow HTTP client로 message/context/temperature tweaks 연동
         # temperature는 생성 단계에만 사용 (검색·임베딩과 분리)
-        ai_response = self._mock_langflow_response(
+        ai_response = await self.langflow_client.run_stage1_chat(
             message=payload.message,
             context=context,
             temperature=params.temperature,
@@ -624,40 +625,6 @@ class AssignmentService:
             vector_search_score=round(best_score, 4),
         )
         return context, visualization
-
-    def _mock_langflow_response(
-        self, *, message: str, context: str, temperature: float
-    ) -> str:
-        """Langflow 연동 전 placeholder.
-
-        context가 있으면 요약형으로 재작성하고, temperature가 높으면 추측 문장을 덧붙인다.
-        """
-
-        snippets = [s.strip() for s in re.split(r"\n{2,}", context) if s.strip()]
-        base_parts = snippets[:3] if snippets else ["제공된 학습 자료에서 관련 내용을 찾지 못했습니다."]
-        lines = [
-            f"질문('{message}')에 대해 검색된 자료를 바탕으로 답변합니다.",
-            *base_parts,
-        ]
-        # 10문장 이상을 맞추기 위한 확장 (체험용 mock)
-        fillers = [
-            "위 내용은 검색된 청크를 중심으로 정리한 것입니다.",
-            "파라미터가 달라지면 검색 범위와 답변 톤도 함께 달라질 수 있습니다.",
-            "학습 자료에 나온 사실을 우선적으로 언급했습니다.",
-            "학생이 이해하기 쉬운 문장으로 풀어 썼습니다.",
-            "추가 질문은 같은 자료 범위에서 다시 검색할 수 있습니다.",
-            "자료에 없는 세부 일화는 온도가 높을 때 더 쉽게 섞일 수 있습니다.",
-            "실제 운영에서는 Langflow가 이 구간을 생성합니다.",
-        ]
-        while len(lines) < 10:
-            lines.append(fillers[(len(lines) - 1) % len(fillers)])
-
-        if temperature >= 0.7:
-            lines.append(
-                "참고로 자료에 직접 나오지 않은 배경 이야기도 섞어 설명할 수 있습니다. "
-                "(고온 mock)"
-            )
-        return " ".join(lines)
 
     async def _evaluate_response(
         self,
