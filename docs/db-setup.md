@@ -37,6 +37,22 @@ docker compose up -d db
 docker compose run --rm backend alembic upgrade head
 ```
 
+### fresh DB — 로컬 E2E 계정 seed (선택)
+
+`alembic upgrade head` 직후, Notion E2E 계정·학급 1건을 넣을 때:
+
+```bash
+docker compose run --rm backend python scripts/seed_dev.py
+```
+
+| 항목 | 값 |
+|------|-----|
+| 학급 | 3학년 2반 (`class_id`는 DB마다 다름) |
+| 교사 | `e2e.teacher@example.com` / `Passw0rd!` |
+| 학생 | `e2e.student@example.com` / `Passw0rd!` |
+
+Stage1 과제 생성은 `.env`의 `OPENAI_API_KEY`가 여전히 필요하다.
+
 ### DB 접속 확인
 
 - **Swagger**: http://localhost:8000/docs → **Health** → `GET /health/db`
