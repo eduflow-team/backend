@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
+import random
 import re
 
 import httpx
 
 from app.core.config import settings
 from app.core.exceptions import Stage1DocumentProcessingError, UnsupportedStage1FileTypeError
+
+logger = logging.getLogger(__name__)
+
+_EMBED_MAX_ATTEMPTS = 4
+_EMBED_BACKOFF_BASE_SECONDS = 0.5
+_EMBED_BODY_LOG_LIMIT = 500
+_EMBED_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
 
 def split_text_into_chunks(text: str, chunk_size: int) -> list[str]:
@@ -76,8 +86,31 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return max(0.0, min(1.0, dot / (norm_a * norm_b)))
 
 
+def _truncate_body(text: str) -> str:
+    cleaned = text.strip().replace("\n", " ")
+    if len(cleaned) <= _EMBED_BODY_LOG_LIMIT:
+        return cleaned
+    return f"{cleaned[:_EMBED_BODY_LOG_LIMIT]}..."
+
+
+def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
+    """Retry-After가 있으면 우선, 없으면 exponential backoff(+jitter)."""
+
+    header = response.headers.get("Retry-After")
+    if header:
+        try:
+            return max(0.0, float(header))
+        except ValueError:
+            pass
+    return _EMBED_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, 0.25)
+
+
 async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """OpenAI embeddings API로 벡터를 생성한다. 차수는 config의 768에 맞춘다."""
+    """OpenAI embeddings API로 벡터를 생성한다. 차수는 config의 768에 맞춘다.
+
+    429/5xx/timeout 등은 exponential backoff로 재시도하고,
+    실패 시 HTTP status·body를 로그에 남긴다. 클라이언트 메시지는 공통 문구 유지.
+    """
 
     if not texts:
         return []
@@ -93,26 +126,106 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     if settings.OPENAI_EMBEDDING_DIMENSIONS:
         payload["dimensions"] = settings.OPENAI_EMBEDDING_DIMENSIONS
 
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/embeddings",
-                headers={
-                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-    except httpx.HTTPError as exc:
-        raise Stage1DocumentProcessingError(
-            "문서 청크 분할 및 벡터 임베딩 처리 중 서버 오류가 발생했습니다."
-        ) from exc
+    headers = {
+        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    last_exc: BaseException | None = None
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for attempt in range(1, _EMBED_MAX_ATTEMPTS + 1):
+            try:
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers=headers,
+                    json=payload,
+                )
+                if response.is_success:
+                    data = response.json()
+                    break
+
+                body = _truncate_body(response.text)
+                retryable = response.status_code in _EMBED_RETRYABLE_STATUS
+                if retryable and attempt < _EMBED_MAX_ATTEMPTS:
+                    delay = _retry_after_seconds(response, attempt)
+                    logger.warning(
+                        "OpenAI embeddings 일시 오류 (attempt=%s/%s, status=%s, "
+                        "retry_in=%.2fs, body=%s)",
+                        attempt,
+                        _EMBED_MAX_ATTEMPTS,
+                        response.status_code,
+                        delay,
+                        body,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                logger.error(
+                    "OpenAI embeddings 실패 (attempt=%s/%s, status=%s, body=%s)",
+                    attempt,
+                    _EMBED_MAX_ATTEMPTS,
+                    response.status_code,
+                    body,
+                )
+                raise Stage1DocumentProcessingError(
+                    "문서 청크 분할 및 벡터 임베딩 처리 중 서버 오류가 발생했습니다."
+                )
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                if attempt < _EMBED_MAX_ATTEMPTS:
+                    delay = _EMBED_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    logger.warning(
+                        "OpenAI embeddings timeout (attempt=%s/%s, retry_in=%.2fs, error=%s)",
+                        attempt,
+                        _EMBED_MAX_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(
+                    "OpenAI embeddings timeout 최종 실패 (attempts=%s, error=%s)",
+                    _EMBED_MAX_ATTEMPTS,
+                    exc,
+                )
+                raise Stage1DocumentProcessingError(
+                    "문서 청크 분할 및 벡터 임베딩 처리 중 서버 오류가 발생했습니다."
+                ) from exc
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt < _EMBED_MAX_ATTEMPTS:
+                    delay = _EMBED_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    logger.warning(
+                        "OpenAI embeddings 연결 오류 (attempt=%s/%s, retry_in=%.2fs, "
+                        "error=%s)",
+                        attempt,
+                        _EMBED_MAX_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(
+                    "OpenAI embeddings 연결 오류 최종 실패 (attempts=%s, error=%s)",
+                    _EMBED_MAX_ATTEMPTS,
+                    exc,
+                )
+                raise Stage1DocumentProcessingError(
+                    "문서 청크 분할 및 벡터 임베딩 처리 중 서버 오류가 발생했습니다."
+                ) from exc
+        else:
+            raise Stage1DocumentProcessingError(
+                "문서 청크 분할 및 벡터 임베딩 처리 중 서버 오류가 발생했습니다."
+            ) from last_exc
 
     items = sorted(data.get("data", []), key=lambda item: item.get("index", 0))
     embeddings = [item["embedding"] for item in items]
     if len(embeddings) != len(texts):
+        logger.error(
+            "OpenAI embeddings 응답 개수 불일치 (expected=%s, got=%s)",
+            len(texts),
+            len(embeddings),
+        )
         raise Stage1DocumentProcessingError(
             "문서 청크 분할 및 벡터 임베딩 처리 중 서버 오류가 발생했습니다."
         )
