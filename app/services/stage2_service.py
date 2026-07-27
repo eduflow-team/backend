@@ -75,6 +75,7 @@ from app.services.grading.geval_service import GEvalService
 from app.services.grading.highlight_grader import HighlightGrader
 from app.services.embedding_service import extract_text_from_upload
 from app.services.stage2_generation_orchestrator import Stage2GenerationOrchestrator
+from app.services.stage2_generation_metadata import build_stage2_generation_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,10 @@ class Stage2Service:
                 expected_error_count=expected_error_count,
             )
             detail = await self.stage2_detail_repository.create(detail)
+            await self.stage2_detail_repository.set_generation_metadata(
+                detail,
+                build_stage2_generation_metadata(pipeline),
+            )
 
             response_errors: list[Stage2GeneratedErrorItem] = []
             for error in generated_errors:

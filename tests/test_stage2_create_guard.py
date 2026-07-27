@@ -212,6 +212,9 @@ async def test_create_persists_when_pipeline_ready_for_save(tmp_path: Path) -> N
     service.assignment_repository.create = AsyncMock(return_value=assignment)
     service.document_repository.create = AsyncMock(return_value=document)
     service.stage2_detail_repository.create = AsyncMock(return_value=detail)
+    service.stage2_detail_repository.set_generation_metadata = AsyncMock(
+        return_value=detail
+    )
     service.stage2_error_answer_repository.create = AsyncMock(return_value=error_row)
 
     upload_dir = tmp_path / "uploads" / "stage2"
@@ -235,6 +238,13 @@ async def test_create_persists_when_pipeline_ready_for_save(tmp_path: Path) -> N
 
     assert response.assignment_id == 42
     assert len(response.generated_errors) == 1
+    service.stage2_detail_repository.set_generation_metadata.assert_awaited_once()
+    metadata_arg = (
+        service.stage2_detail_repository.set_generation_metadata.await_args.args[1]
+    )
+    assert metadata_arg.flow_version == "stage2-v2"
+    assert metadata_arg.generation_attempts == 1
+    assert metadata_arg.validation_codes == []
     service.session.commit.assert_awaited_once()
     service.session.rollback.assert_not_called()
     assert (upload_dir / "42" / "lesson.txt").exists()
