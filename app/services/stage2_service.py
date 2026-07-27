@@ -73,6 +73,7 @@ from app.schemas.stage2 import (
 from app.services.grading.geval_service import GEvalService
 from app.services.grading.highlight_grader import HighlightGrader
 from app.services.embedding_service import extract_text_from_upload
+from app.services.stage2_generation_orchestrator import Stage2GenerationOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,9 @@ class Stage2Service:
         self.submission_repository = SubmissionRepository(session)
         self.evaluation_repository = EvaluationRepository(session)
         self.langflow_client = LangflowClient()
+        self.generation_orchestrator = Stage2GenerationOrchestrator(
+            langflow_client=self.langflow_client,
+        )
         self.highlight_grader = HighlightGrader()
         self.geval_service = GEvalService()
 
@@ -150,20 +154,25 @@ class Stage2Service:
             logger.exception("stage2 document processing failed")
             raise Stage2DocumentProcessingError() from exc
 
-        langflow_result = await self.langflow_client.run_stage2_hallucination(
+        pipeline = await self.generation_orchestrator.generate(
             document_text=raw_text,
             question=question,
             persona=persona,
             hallucination_types=hallucination_types,
             expected_error_count=expected_error_count,
         )
-
+        langflow_result = pipeline.result
         generated_errors = langflow_result.generated_errors
-        if len(generated_errors) < expected_error_count:
+
+        if not pipeline.validation.is_valid:
             logger.warning(
-                "stage2 langflow returned %s errors, expected %s",
-                len(generated_errors),
-                expected_error_count,
+                "stage2 generation validation failed: %s",
+                ",".join(pipeline.validation.codes),
+            )
+        if not pipeline.index_application.applied:
+            logger.warning(
+                "stage2 index application failed: %s",
+                ",".join(pipeline.index_application.codes),
             )
 
         assignment = Assignment(

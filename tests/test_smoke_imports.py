@@ -35,6 +35,16 @@ def test_import_stage2_service() -> None:
     assert Stage2Service is not None
 
 
+def test_import_stage2_generation_orchestrator() -> None:
+    from app.services.stage2_generation_orchestrator import (
+        Stage2GenerationOrchestrator,
+        Stage2GenerationPipelineResult,
+    )
+
+    assert Stage2GenerationOrchestrator is not None
+    assert Stage2GenerationPipelineResult is not None
+
+
 def test_import_stage2_generation_validator() -> None:
     from app.services.stage2_generation_validator import (
         Stage2GenerationValidationCode,
