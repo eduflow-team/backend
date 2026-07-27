@@ -38,6 +38,12 @@ def test_import_stage2_generation_validator() -> None:
     assert validate_stage2_generation_result is not None
 
 
+def test_import_stage2_index_calculator() -> None:
+    from app.services.stage2_index_calculator import apply_server_error_indices
+
+    assert apply_server_error_indices is not None
+
+
 def test_import_highlight_grader() -> None:
     from app.services.grading.highlight_grader import HighlightGrader
 
