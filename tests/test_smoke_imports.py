@@ -56,6 +56,14 @@ def test_import_stage2_retrieval_input() -> None:
     assert build_stage2_retrieval_input is not None
 
 
+def test_import_stage2_generation_metadata() -> None:
+    from app.schemas.stage2_generation import Stage2GenerationMetadata
+    from app.repositories.stage import Stage2DetailRepository
+
+    assert Stage2GenerationMetadata is not None
+    assert hasattr(Stage2DetailRepository, "set_generation_metadata")
+
+
 def test_import_highlight_grader() -> None:
     from app.services.grading.highlight_grader import HighlightGrader
 

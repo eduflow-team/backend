@@ -34,6 +34,37 @@ class Stage2RetrievalInput(BaseModel):
     synthetic_fallback_allowed: bool = True
 
 
+class Stage2GenerationMetadata(BaseModel):
+    """Stage 2 생성 파이프라인 감사·재현용 내부 메타데이터 (외부 API 미노출)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    flow_version: str = Field(..., min_length=1)
+    generation_attempts: int = Field(..., ge=1)
+    retrieval_source: str | None = None
+    retrieved_context: str | None = None
+    validation_codes: list[str] = Field(default_factory=list)
+    candidate_chunk_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("retrieval_source")
+    @classmethod
+    def validate_retrieval_source(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if normalized not in ALLOWED_RETRIEVAL_SOURCES:
+            raise ValueError("invalid retrieval_source")
+        return normalized
+
+    @field_validator("retrieved_context", mode="before")
+    @classmethod
+    def strip_retrieved_context(cls, value: Any) -> Any:
+        if value is None or not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+
 class Stage2GeneratedErrorDraft(BaseModel):
     """Langflow가 반환하는 단일 오류 항목 (DB/API 저장 전 내부 표현)."""
 
@@ -124,13 +155,32 @@ def parse_stage2_langflow_generation_result(
     )
 
 
+def parse_stage2_generation_metadata(
+    raw: dict[str, Any] | None,
+) -> Stage2GenerationMetadata | None:
+    """DB JSON 컬럼 값을 내부 메타데이터 모델로 변환한다."""
+    if raw is None:
+        return None
+    return Stage2GenerationMetadata.model_validate(raw)
+
+
+def dump_stage2_generation_metadata(
+    metadata: Stage2GenerationMetadata,
+) -> dict[str, Any]:
+    """내부 메타데이터를 DB JSON 컬럼에 저장 가능한 dict로 변환한다."""
+    return metadata.model_dump(mode="json")
+
+
 __all__ = [
     "ALLOWED_RETRIEVAL_SOURCES",
     "Stage2GeneratedErrorDraft",
+    "Stage2GenerationMetadata",
     "Stage2LangflowGenerationResult",
     "Stage2RetrievalCandidate",
     "Stage2RetrievalInput",
     "ValidationError",
+    "dump_stage2_generation_metadata",
     "parse_stage2_generated_errors",
+    "parse_stage2_generation_metadata",
     "parse_stage2_langflow_generation_result",
 ]
