@@ -29,6 +29,7 @@ from app.core.exceptions import (
     Stage2FileTooLargeError,
     Stage2HighlightLimitExceededError,
     Stage2HighlightPhaseIncompleteError,
+    Stage2LangflowServiceUnavailableError,
     UnsupportedStage2FileTypeError,
 )
 from app.models.assignment import Assignment
@@ -161,72 +162,89 @@ class Stage2Service:
             hallucination_types=hallucination_types,
             expected_error_count=expected_error_count,
         )
+        if not pipeline.is_ready_for_save:
+            logger.error(
+                "stage2 generation result not ready for save: %s",
+                ",".join(pipeline.failure_codes),
+            )
+            raise Stage2LangflowServiceUnavailableError()
+
         langflow_result = pipeline.result
         generated_errors = langflow_result.generated_errors
 
-        assignment = Assignment(
-            teacher_id=teacher.user_id,
-            class_id=teacher.class_id,
-            title=title,
-            stage=2,
-            subject=subject,
-            description=question,
-            max_attempts=settings.STAGE2_MAX_ATTEMPTS,
-        )
-        assignment = await self.assignment_repository.create(assignment)
+        saved_path: Path | None = None
+        try:
+            assignment = Assignment(
+                teacher_id=teacher.user_id,
+                class_id=teacher.class_id,
+                title=title,
+                stage=2,
+                subject=subject,
+                description=question,
+                max_attempts=settings.STAGE2_MAX_ATTEMPTS,
+            )
+            assignment = await self.assignment_repository.create(assignment)
 
-        saved_path = await self._save_upload_file(
-            assignment.assignment_id, filename, content
-        )
-        document = Document(
-            assignment_id=assignment.assignment_id,
-            subject=subject,
-            filename=filename,
-            file_path=str(saved_path),
-            file_type=suffix.lstrip("."),
-            raw_text=raw_text,
-        )
-        document = await self.document_repository.create(document)
-
-        detail = Stage2AssignmentDetail(
-            assignment_id=assignment.assignment_id,
-            document_id=document.document_id,
-            question=question,
-            persona=persona,
-            hallucinated_ai_answer=langflow_result.flawed_ai_response,
-            hallucination_types=hallucination_types,
-            expected_error_count=expected_error_count,
-        )
-        detail = await self.stage2_detail_repository.create(detail)
-
-        response_errors: list[Stage2GeneratedErrorItem] = []
-        for error in generated_errors:
-            row = Stage2ErrorAnswer(
+            saved_path = await self._save_upload_file(
+                assignment.assignment_id, filename, content
+            )
+            document = Document(
                 assignment_id=assignment.assignment_id,
-                detail_id=detail.detail_id,
-                error_sentence=error.error_sentence,
-                error_type=error.error_type,
-                start_index=error.start_index,
-                end_index=error.end_index,
-                correct_sentence=error.correct_sentence,
-                hallucination_reason=error.hallucination_reason,
-                evidence_sentence=error.evidence_sentence,
+                subject=subject,
+                filename=filename,
+                file_path=str(saved_path),
+                file_type=suffix.lstrip("."),
+                raw_text=raw_text,
             )
-            row = await self.stage2_error_answer_repository.create(row)
-            response_errors.append(
-                Stage2GeneratedErrorItem(
-                    answer_id=row.answer_id,
-                    error_sentence=row.error_sentence or "",
-                    error_type=row.error_type or "",
-                    start_index=row.start_index or 0,
-                    end_index=row.end_index or 0,
-                    correct_sentence=row.correct_sentence or "",
-                    hallucination_reason=row.hallucination_reason or "",
-                    evidence_sentence=row.evidence_sentence or "",
-                )
-            )
+            document = await self.document_repository.create(document)
 
-        await self.session.commit()
+            detail = Stage2AssignmentDetail(
+                assignment_id=assignment.assignment_id,
+                document_id=document.document_id,
+                question=question,
+                persona=persona,
+                hallucinated_ai_answer=langflow_result.flawed_ai_response,
+                hallucination_types=hallucination_types,
+                expected_error_count=expected_error_count,
+            )
+            detail = await self.stage2_detail_repository.create(detail)
+
+            response_errors: list[Stage2GeneratedErrorItem] = []
+            for error in generated_errors:
+                row = Stage2ErrorAnswer(
+                    assignment_id=assignment.assignment_id,
+                    detail_id=detail.detail_id,
+                    error_sentence=error.error_sentence,
+                    error_type=error.error_type,
+                    start_index=error.start_index,
+                    end_index=error.end_index,
+                    correct_sentence=error.correct_sentence,
+                    hallucination_reason=error.hallucination_reason,
+                    evidence_sentence=error.evidence_sentence,
+                )
+                row = await self.stage2_error_answer_repository.create(row)
+                response_errors.append(
+                    Stage2GeneratedErrorItem(
+                        answer_id=row.answer_id,
+                        error_sentence=row.error_sentence or "",
+                        error_type=row.error_type or "",
+                        start_index=row.start_index or 0,
+                        end_index=row.end_index or 0,
+                        correct_sentence=row.correct_sentence or "",
+                        hallucination_reason=row.hallucination_reason or "",
+                        evidence_sentence=row.evidence_sentence or "",
+                    )
+                )
+
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            if saved_path is not None:
+                saved_path.unlink(missing_ok=True)
+                parent = saved_path.parent
+                if parent.exists() and not any(parent.iterdir()):
+                    parent.rmdir()
+            raise
 
         return Stage2CreateResponse(
             assignment_id=assignment.assignment_id,
