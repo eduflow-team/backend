@@ -7,12 +7,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.exceptions import Stage2LangflowServiceUnavailableError
 from app.schemas.stage2_generation import (
     Stage2GeneratedErrorDraft,
     Stage2LangflowGenerationResult,
     Stage2RetrievalInput,
 )
-from app.services.stage2_generation_orchestrator import Stage2GenerationOrchestrator
+from app.services.stage2_generation_orchestrator import (
+    Stage2GenerationOrchestrator,
+    build_stage2_validation_feedback,
+)
 from app.services.stage2_generation_validator import Stage2GenerationValidationCode
 from app.services.stage2_index_calculator import Stage2IndexCalculationCode
 
@@ -41,6 +45,20 @@ def _error(**overrides: Any) -> Stage2GeneratedErrorDraft:
     return Stage2GeneratedErrorDraft.model_validate(base)
 
 
+def _valid_pair() -> tuple[Stage2GeneratedErrorDraft, Stage2GeneratedErrorDraft]:
+    return (
+        _error(),
+        _error(
+            error_sentence="장영실은 자격루뿐만 아니라, 하늘을 나는 연을 만들어 실험했다는 이야기도 있어요.",
+            error_type="PERSONA_BIAS",
+            correct_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
+            hallucination_reason="페르소나 편향",
+            evidence_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
+            retrieved_context=None,
+        ),
+    )
+
+
 def _langflow_result(*errors: Stage2GeneratedErrorDraft) -> Stage2LangflowGenerationResult:
     return Stage2LangflowGenerationResult(
         flawed_ai_response=FLAWED_RESPONSE,
@@ -48,21 +66,22 @@ def _langflow_result(*errors: Stage2GeneratedErrorDraft) -> Stage2LangflowGenera
     )
 
 
+def test_build_validation_feedback_merges_validator_and_index_codes() -> None:
+    feedback = build_stage2_validation_feedback(
+        validation_codes=(Stage2GenerationValidationCode.ERROR_COUNT_MISMATCH,),
+        index_codes=(Stage2IndexCalculationCode.ERROR_SENTENCE_NOT_FOUND,),
+    )
+
+    assert "ERROR_COUNT_MISMATCH" in feedback
+    assert "ERROR_SENTENCE_NOT_FOUND" in feedback
+    assert "planned_errors 개수" in feedback
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_success_applies_indices_and_validates() -> None:
     langflow_client = AsyncMock()
     langflow_client.run_stage2_hallucination = AsyncMock(
-        return_value=_langflow_result(
-            _error(),
-            _error(
-                error_sentence="장영실은 자격루뿐만 아니라, 하늘을 나는 연을 만들어 실험했다는 이야기도 있어요.",
-                error_type="PERSONA_BIAS",
-                correct_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
-                hallucination_reason="페르소나 편향",
-                evidence_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
-                retrieved_context=None,
-            ),
-        )
+        return_value=_langflow_result(*_valid_pair())
     )
 
     orchestrator = Stage2GenerationOrchestrator(langflow_client=langflow_client)
@@ -92,75 +111,86 @@ async def test_orchestrator_success_applies_indices_and_validates() -> None:
     call_kwargs = langflow_client.run_stage2_hallucination.await_args.kwargs
     assert isinstance(call_kwargs["retrieval_input"], Stage2RetrievalInput)
     assert call_kwargs["validation_feedback"] == ""
+    assert langflow_client.run_stage2_hallucination.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_returns_validation_failure_without_retry() -> None:
+async def test_orchestrator_retries_once_and_succeeds_on_second_attempt() -> None:
+    langflow_client = AsyncMock()
+    langflow_client.run_stage2_hallucination = AsyncMock(
+        side_effect=[
+            _langflow_result(_error()),
+            _langflow_result(*_valid_pair()),
+        ]
+    )
+
+    orchestrator = Stage2GenerationOrchestrator(langflow_client=langflow_client)
+    pipeline = await orchestrator.generate(
+        document_text=DOCUMENT_TEXT,
+        question="질문",
+        persona="페르소나",
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=2,
+    )
+
+    assert pipeline.is_ready_for_save is True
+    assert pipeline.generation_attempts == 2
+    assert langflow_client.run_stage2_hallucination.await_count == 2
+
+    second_call_kwargs = langflow_client.run_stage2_hallucination.await_args_list[1].kwargs
+    assert "ERROR_COUNT_MISMATCH" in second_call_kwargs["validation_feedback"]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_raises_after_retry_exhausted() -> None:
     langflow_client = AsyncMock()
     langflow_client.run_stage2_hallucination = AsyncMock(
         return_value=_langflow_result(_error())
     )
 
     orchestrator = Stage2GenerationOrchestrator(langflow_client=langflow_client)
-    pipeline = await orchestrator.generate(
-        document_text=DOCUMENT_TEXT,
-        question="질문",
-        persona="페르소나",
-        hallucination_types=HALLUCINATION_TYPES,
-        expected_error_count=2,
-    )
 
-    assert pipeline.validation.is_valid is False
-    assert Stage2GenerationValidationCode.ERROR_COUNT_MISMATCH in pipeline.validation.codes
-    assert pipeline.is_ready_for_save is False
+    with pytest.raises(Stage2LangflowServiceUnavailableError):
+        await orchestrator.generate(
+            document_text=DOCUMENT_TEXT,
+            question="질문",
+            persona="페르소나",
+            hallucination_types=HALLUCINATION_TYPES,
+            expected_error_count=2,
+        )
+
+    assert langflow_client.run_stage2_hallucination.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_marks_index_failure_when_sentence_missing() -> None:
+async def test_orchestrator_does_not_retry_langflow_transport_failure() -> None:
     langflow_client = AsyncMock()
     langflow_client.run_stage2_hallucination = AsyncMock(
-        return_value=_langflow_result(
-            _error(error_sentence="본문에 없는 문장입니다."),
-            _error(
-                error_sentence="장영실은 자격루뿐만 아니라, 하늘을 나는 연을 만들어 실험했다는 이야기도 있어요.",
-                error_type="PERSONA_BIAS",
-                correct_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
-                hallucination_reason="페르소나 편향",
-                evidence_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
-                retrieved_context=None,
-            ),
-        )
+        side_effect=Stage2LangflowServiceUnavailableError()
     )
 
     orchestrator = Stage2GenerationOrchestrator(langflow_client=langflow_client)
-    pipeline = await orchestrator.generate(
-        document_text=DOCUMENT_TEXT,
-        question="질문",
-        persona="페르소나",
-        hallucination_types=HALLUCINATION_TYPES,
-        expected_error_count=2,
-    )
 
-    assert pipeline.index_application.applied is False
-    assert Stage2IndexCalculationCode.ERROR_SENTENCE_NOT_FOUND in pipeline.index_application.codes
-    assert pipeline.result.generated_errors[0].start_index is None
+    with pytest.raises(Stage2LangflowServiceUnavailableError):
+        await orchestrator.generate(
+            document_text=DOCUMENT_TEXT,
+            question="질문",
+            persona="페르소나",
+            hallucination_types=HALLUCINATION_TYPES,
+            expected_error_count=2,
+        )
+
+    assert langflow_client.run_stage2_hallucination.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_forwards_validation_feedback() -> None:
+async def test_orchestrator_reuses_retrieval_input_on_retry() -> None:
     langflow_client = AsyncMock()
     langflow_client.run_stage2_hallucination = AsyncMock(
-        return_value=_langflow_result(
-            _error(),
-            _error(
-                error_sentence="장영실은 자격루뿐만 아니라, 하늘을 나는 연을 만들어 실험했다는 이야기도 있어요.",
-                error_type="PERSONA_BIAS",
-                correct_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
-                hallucination_reason="페르소나 편향",
-                evidence_sentence="장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
-                retrieved_context=None,
-            ),
-        )
+        side_effect=[
+            _langflow_result(_error()),
+            _langflow_result(*_valid_pair()),
+        ]
     )
 
     orchestrator = Stage2GenerationOrchestrator(langflow_client=langflow_client)
@@ -170,9 +200,37 @@ async def test_orchestrator_forwards_validation_feedback() -> None:
         persona="페르소나",
         hallucination_types=HALLUCINATION_TYPES,
         expected_error_count=2,
-        validation_feedback="ERROR_SENTENCE_NOT_FOUND",
-        generation_attempts=2,
     )
 
-    call_kwargs = langflow_client.run_stage2_hallucination.await_args.kwargs
-    assert call_kwargs["validation_feedback"] == "ERROR_SENTENCE_NOT_FOUND"
+    first_retrieval = langflow_client.run_stage2_hallucination.await_args_list[0].kwargs[
+        "retrieval_input"
+    ]
+    second_retrieval = langflow_client.run_stage2_hallucination.await_args_list[1].kwargs[
+        "retrieval_input"
+    ]
+    assert first_retrieval is second_retrieval
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_marks_index_failure_when_sentence_missing() -> None:
+    langflow_client = AsyncMock()
+    langflow_client.run_stage2_hallucination = AsyncMock(
+        return_value=_langflow_result(
+            _error(error_sentence="본문에 없는 문장입니다."),
+            _valid_pair()[1],
+        )
+    )
+
+    orchestrator = Stage2GenerationOrchestrator(langflow_client=langflow_client)
+
+    with pytest.raises(Stage2LangflowServiceUnavailableError):
+        await orchestrator.generate(
+            document_text=DOCUMENT_TEXT,
+            question="질문",
+            persona="페르소나",
+            hallucination_types=HALLUCINATION_TYPES,
+            expected_error_count=2,
+        )
+
+    second_call_kwargs = langflow_client.run_stage2_hallucination.await_args_list[1].kwargs
+    assert "ERROR_SENTENCE_NOT_FOUND" in second_call_kwargs["validation_feedback"]

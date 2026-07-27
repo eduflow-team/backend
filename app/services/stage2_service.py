@@ -164,17 +164,6 @@ class Stage2Service:
         langflow_result = pipeline.result
         generated_errors = langflow_result.generated_errors
 
-        if not pipeline.validation.is_valid:
-            logger.warning(
-                "stage2 generation validation failed: %s",
-                ",".join(pipeline.validation.codes),
-            )
-        if not pipeline.index_application.applied:
-            logger.warning(
-                "stage2 index application failed: %s",
-                ",".join(pipeline.index_application.codes),
-            )
-
         assignment = Assignment(
             teacher_id=teacher.user_id,
             class_id=teacher.class_id,
