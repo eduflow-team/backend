@@ -2,10 +2,17 @@
 
 
 def test_import_langflow_client() -> None:
-    from app.clients.langflow_client import LangflowClient, Stage2LangflowResult
+    from app.clients.langflow_client import (
+        LangflowClient,
+        Stage2LangflowResult,
+        build_stage2_langflow_tweaks,
+        serialize_stage2_retrieval_input,
+    )
 
     assert LangflowClient is not None
     assert Stage2LangflowResult is not None
+    assert build_stage2_langflow_tweaks is not None
+    assert serialize_stage2_retrieval_input is not None
 
 
 def test_import_stage2_schemas() -> None:

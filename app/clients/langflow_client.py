@@ -20,6 +20,7 @@ from app.core.exceptions import (
 from app.schemas.stage2_generation import (
     Stage2GeneratedErrorDraft,
     Stage2LangflowGenerationResult,
+    Stage2RetrievalInput,
     parse_stage2_langflow_generation_result,
 )
 
@@ -28,6 +29,54 @@ logger = logging.getLogger(__name__)
 
 # Backward-compatible alias; canonical type lives in stage2_generation.
 Stage2LangflowResult = Stage2LangflowGenerationResult
+
+_EMPTY_STAGE2_RETRIEVAL_INPUT = Stage2RetrievalInput(candidate_chunks=[])
+
+
+def serialize_stage2_retrieval_input(retrieval_input: Stage2RetrievalInput) -> str:
+    """Langflow Planner(`Prompt-We0Ob`)의 candidate_chunks tweak 값."""
+    return json.dumps(retrieval_input.model_dump(mode="json"), ensure_ascii=False)
+
+
+def build_stage2_langflow_tweaks(
+    *,
+    gen_prompt_node_id: str,
+    planner_prompt_node_id: str,
+    document_text: str,
+    question: str,
+    persona: str,
+    hallucination_types: list[str],
+    expected_error_count: int,
+    retrieval_input: Stage2RetrievalInput | None = None,
+    validation_feedback: str = "",
+) -> dict[str, dict[str, str]]:
+    """Stage 2 plan-first Flow tweaks payload (contract v2)."""
+    if retrieval_input is None:
+        retrieval_input = _EMPTY_STAGE2_RETRIEVAL_INPUT
+
+    types_str = ", ".join(hallucination_types)
+    count_str = str(expected_error_count)
+    shared = {
+        "document_text": document_text,
+        "hallucination_types": types_str,
+        "expected_error_count": count_str,
+    }
+    gen_tweak = {
+        **shared,
+        "question": question,
+        "persona": persona,
+    }
+    planner_tweak = {
+        **shared,
+        "question": question,
+        "persona": persona,
+        "candidate_chunks": serialize_stage2_retrieval_input(retrieval_input),
+        "validation_feedback": validation_feedback,
+    }
+    return {
+        gen_prompt_node_id: gen_tweak,
+        planner_prompt_node_id: planner_tweak,
+    }
 
 
 class LangflowClient:
@@ -147,6 +196,8 @@ class LangflowClient:
         persona: str,
         hallucination_types: list[str],
         expected_error_count: int,
+        retrieval_input: Stage2RetrievalInput | None = None,
+        validation_feedback: str = "",
     ) -> Stage2LangflowResult:
         if settings.LANGFLOW_STAGE2_FLOW_ID.strip():
             return await self._run_stage2_http(
@@ -155,6 +206,8 @@ class LangflowClient:
                 persona=persona,
                 hallucination_types=hallucination_types,
                 expected_error_count=expected_error_count,
+                retrieval_input=retrieval_input,
+                validation_feedback=validation_feedback,
             )
         return self._mock_stage2_hallucination(
             document_text=document_text,
@@ -172,29 +225,27 @@ class LangflowClient:
         persona: str,
         hallucination_types: list[str],
         expected_error_count: int,
+        retrieval_input: Stage2RetrievalInput | None = None,
+        validation_feedback: str = "",
     ) -> Stage2LangflowResult:
         gen_prompt_node_id = settings.LANGFLOW_STAGE2_GEN_PROMPT_NODE_ID.strip()
-        ext_prompt_node_id = settings.LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID.strip()
-        if not gen_prompt_node_id or not ext_prompt_node_id:
+        planner_prompt_node_id = settings.LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID.strip()
+        if not gen_prompt_node_id or not planner_prompt_node_id:
             raise Stage2LangflowServiceUnavailableError()
 
-        types_str = ", ".join(hallucination_types)
-        count_str = str(expected_error_count)
-        shared = {
-            "document_text": document_text,
-            "hallucination_types": types_str,
-            "expected_error_count": count_str,
-        }
         payload = {
             "input_value": "",
-            "tweaks": {
-                gen_prompt_node_id: {
-                    **shared,
-                    "question": question,
-                    "persona": persona,
-                },
-                ext_prompt_node_id: shared,
-            },
+            "tweaks": build_stage2_langflow_tweaks(
+                gen_prompt_node_id=gen_prompt_node_id,
+                planner_prompt_node_id=planner_prompt_node_id,
+                document_text=document_text,
+                question=question,
+                persona=persona,
+                hallucination_types=hallucination_types,
+                expected_error_count=expected_error_count,
+                retrieval_input=retrieval_input,
+                validation_feedback=validation_feedback,
+            ),
         }
         url = (
             f"{settings.LANGFLOW_URL.rstrip('/')}"
@@ -235,7 +286,11 @@ class LangflowClient:
             raw = texts[1].strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            parsed = json.loads(raw)
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                logger.exception("stage2 langflow generated_errors JSON parse failed")
+                raise Stage2LangflowServiceUnavailableError() from exc
             if isinstance(parsed, dict):
                 raw_errors = parsed.get("generated_errors", [])
             elif isinstance(parsed, list):
