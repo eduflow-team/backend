@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from app.core.config import settings
@@ -12,8 +13,10 @@ from app.services.grading.highlight_grader import _normalize, _overlap_score
 @dataclass(frozen=True)
 class Stage2ChunkCandidate:
     chunk_id: str
+    source_index: int
     text: str
     relevance_score: float
+    selection_bucket: str
 
 
 def build_stage2_chunk_candidates(
@@ -43,32 +46,39 @@ def build_stage2_chunk_candidates(
         else max_total_chars
     )
 
-    chunks = split_text_into_chunks(document_text, resolved_chunk_size)
-    filtered = [chunk for chunk in chunks if len(chunk.strip()) >= resolved_min_chars]
-    if not filtered:
+    chunks = _split_stage2_document(document_text, resolved_chunk_size)
+    chunks = _merge_short_chunks(
+        chunks,
+        min_chunk_chars=resolved_min_chars,
+    )
+    if not chunks:
         return []
 
     normalized_question = _normalize(question)
-    scored = sorted(
-        (
+    ranked = sorted(
+        [
             Stage2ChunkCandidate(
                 chunk_id=f"chunk-{index}",
+                source_index=index,
                 text=chunk,
                 relevance_score=_score_chunk_relevance(normalized_question, chunk),
+                selection_bucket="UNSELECTED",
             )
-            for index, chunk in enumerate(filtered)
-        ),
-        key=lambda candidate: (-candidate.relevance_score, candidate.chunk_id),
+            for index, chunk in enumerate(chunks)
+        ],
+        key=lambda candidate: (-candidate.relevance_score, candidate.source_index),
+    )
+    selected_pool = _select_diverse_candidates(
+        ranked,
+        max_candidates=resolved_max_candidates,
     )
 
     selected: list[Stage2ChunkCandidate] = []
     total_chars = 0
-    for candidate in scored:
-        if len(selected) >= resolved_max_candidates:
-            break
+    for candidate in selected_pool:
         next_total = total_chars + len(candidate.text)
-        if selected and next_total > resolved_max_total_chars:
-            break
+        if next_total > resolved_max_total_chars:
+            continue
         selected.append(candidate)
         total_chars = next_total
 
@@ -76,7 +86,106 @@ def build_stage2_chunk_candidates(
 
 
 def _score_chunk_relevance(normalized_question: str, chunk_text: str) -> float:
+    """가벼운 lexical 휴리스틱 점수이며 의미 유사도를 보장하지 않는다."""
     normalized_chunk = _normalize(chunk_text)
     if not normalized_question or not normalized_chunk:
         return 0.0
     return _overlap_score(normalized_question, normalized_chunk)
+
+
+def _split_stage2_document(document_text: str, chunk_size: int) -> list[str]:
+    """PDF 줄바꿈을 정리하고 가능한 범위에서 문장 경계를 보존해 청킹한다."""
+    normalized = re.sub(r"\r\n?", "\n", document_text).strip()
+    if not normalized:
+        return []
+
+    sentence_units = [
+        unit.strip()
+        for unit in re.split(r"(?<=[.!?。！？])\s+|\n+", normalized)
+        if unit.strip()
+    ]
+    sentence_separated = "\n\n".join(sentence_units)
+    return split_text_into_chunks(sentence_separated, chunk_size)
+
+
+def _merge_short_chunks(
+    chunks: list[str],
+    *,
+    min_chunk_chars: int,
+) -> list[str]:
+    """짧은 근거를 버리지 않고 인접 청크와 병합한다."""
+    if not chunks:
+        return []
+
+    merged: list[str] = []
+    pending = ""
+    for chunk in chunks:
+        stripped = chunk.strip()
+        if not stripped:
+            continue
+        if len(stripped) < min_chunk_chars:
+            if merged:
+                merged[-1] = f"{merged[-1]}\n\n{stripped}"
+            else:
+                pending = f"{pending}\n\n{stripped}".strip()
+            continue
+        if pending:
+            stripped = f"{pending}\n\n{stripped}"
+            pending = ""
+        merged.append(stripped)
+
+    if pending:
+        if merged:
+            merged[-1] = f"{merged[-1]}\n\n{pending}"
+        else:
+            merged.append(pending)
+    return merged
+
+
+def _select_diverse_candidates(
+    ranked: list[Stage2ChunkCandidate],
+    *,
+    max_candidates: int,
+) -> list[Stage2ChunkCandidate]:
+    """상위 근거 후보와 문서 전반의 context 후보를 함께 선택한다."""
+    if max_candidates <= 0 or not ranked:
+        return []
+
+    limit = min(max_candidates, len(ranked))
+    top_count = min(2, limit)
+    selected = [
+        _with_bucket(candidate, "TOP_RELEVANCE")
+        for candidate in ranked[:top_count]
+    ]
+
+    remaining = ranked[top_count:]
+    needed = limit - len(selected)
+    if needed <= 0:
+        return selected
+    if len(remaining) <= needed:
+        selected.extend(
+            _with_bucket(candidate, "DIVERSE_CONTEXT")
+            for candidate in remaining
+        )
+        return selected
+
+    positions = {
+        min(len(remaining) - 1, ((index + 1) * len(remaining)) // (needed + 1))
+        for index in range(needed)
+    }
+    for position in sorted(positions):
+        selected.append(_with_bucket(remaining[position], "DIVERSE_CONTEXT"))
+    return selected
+
+
+def _with_bucket(
+    candidate: Stage2ChunkCandidate,
+    bucket: str,
+) -> Stage2ChunkCandidate:
+    return Stage2ChunkCandidate(
+        chunk_id=candidate.chunk_id,
+        source_index=candidate.source_index,
+        text=candidate.text,
+        relevance_score=candidate.relevance_score,
+        selection_bucket=bucket,
+    )
