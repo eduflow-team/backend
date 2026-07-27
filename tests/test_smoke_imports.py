@@ -28,6 +28,16 @@ def test_import_stage2_service() -> None:
     assert Stage2Service is not None
 
 
+def test_import_stage2_generation_validator() -> None:
+    from app.services.stage2_generation_validator import (
+        Stage2GenerationValidationCode,
+        validate_stage2_generation_result,
+    )
+
+    assert Stage2GenerationValidationCode.ERROR_COUNT_MISMATCH
+    assert validate_stage2_generation_result is not None
+
+
 def test_import_highlight_grader() -> None:
     from app.services.grading.highlight_grader import HighlightGrader
 
