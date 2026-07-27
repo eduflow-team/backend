@@ -4,7 +4,7 @@
 
 | Method | Path | 비고 |
 |--------|------|------|
-| POST | `/teacher/assignments/step1` | multipart + preset 5종 병렬 임베딩 |
+| POST | `/teacher/assignments/step1` | multipart + preset 5종 임베딩 (동시성 최대 2) |
 | GET | `/student/assignments/{id}/step1` | 상세·시도·최고점 |
 | POST | `/student/assignments/{id}/step1/chat` | 검색 + Langflow 생성 (+청크 preview). 미설정/실패 시 503 |
 | POST | `/student/assignments/{id}/step1/submit` | 시도 3회 + 하이브리드 채점 + `student_prompt` |
@@ -33,7 +33,7 @@ chat `rag_process_visualization`: `total_chunks`, `retrieved_chunks`, `vector_se
 - `top_k` / `temperature`만 바꿔도 재임베딩하지 않음
 - DB preset 청크 로드 → 질문 임베딩 → cosine → `top_k` → Langflow 생성
 - chunk_size 허용: `50 / 200 / 500 / 1200 / 3000` (밖이면 400)
-- create 시 preset 5종 병렬 임베딩, chat은 재사용
+- create 시 preset 5종 임베딩(동시 최대 2), chat은 재사용
 
 ## submit
 
@@ -43,9 +43,15 @@ chat `rag_process_visualization`: `total_chunks`, `retrieved_chunks`, `vector_se
 
 ## Langflow
 
-`LangflowClient.run_stage1_chat` (Stage1 전용, mock 없음)
+`LangflowClient.run_stage1_chat` (Stage1 mock 없음)
 
 - env: `LANGFLOW_URL`, `LANGFLOW_API_KEY`, `LANGFLOW_STAGE1_CHAT_FLOW_ID`, `LANGFLOW_STAGE1_PROMPT_NODE_ID`, `LANGFLOW_STAGE1_MODEL_NODE_ID`
 - tweaks: Prompt `context`, OpenAI `temperature`
 - Prompt `context`는 다른 노드와 연결하지 말 것 / Chat Input → `message` 유지
 - 프롬프트: ai 레포 `prompts/stage1/rag-chat.md`
+
+## 임베딩 안정화
+
+- 실패 시 OpenAI HTTP status/body를 로그에 기록
+- 429/5xx/timeout 등은 exponential backoff 재시도
+- create preset 임베딩은 `Semaphore(2)`로 동시성 제한
