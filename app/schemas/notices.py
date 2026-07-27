@@ -31,6 +31,13 @@ class StudentNoticeListResponse(BaseModel):
     notices: list[NoticeItem]
 
 
+class TeacherNoticeListResponse(BaseModel):
+    """GET /teacher/notices 성공 응답."""
+
+    total_count: int
+    notices: list[NoticeItem]
+
+
 class TeacherNoticeCreateRequest(BaseModel):
     """POST /teacher/notices 요청 바디."""
 

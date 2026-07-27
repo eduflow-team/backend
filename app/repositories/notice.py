@@ -34,6 +34,20 @@ class NoticeRepository(BaseRepository[Notice]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_for_teacher(self, class_ids: set[int]) -> list[Notice]:
+        """교사용 공지 목록: 담당 학급 공지 + 전체 공지(`class_id=null`)."""
+
+        stmt = select(Notice).order_by(Notice.created_at.desc())
+        if class_ids:
+            stmt = stmt.where(
+                or_(Notice.class_id.in_(class_ids), Notice.class_id.is_(None))
+            )
+        else:
+            stmt = stmt.where(Notice.class_id.is_(None))
+        stmt = self._apply_not_deleted(stmt)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def search_by_keyword(self, keyword: str, *, limit: int = 20) -> list[Notice]:
         stmt = (
             select(Notice)

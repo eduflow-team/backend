@@ -21,6 +21,7 @@ from app.schemas.notices import (
     StudentNoticeListResponse,
     TeacherNoticeCreateRequest,
     TeacherNoticeCreateResponse,
+    TeacherNoticeListResponse,
     compute_is_new,
 )
 
@@ -63,6 +64,39 @@ class NoticeService:
         ]
 
         return StudentNoticeListResponse(total_count=total_count, notices=items)
+
+    async def get_teacher_notices(
+        self,
+        user_id: int,
+        *,
+        page: int = 1,
+        size: int = 10,
+    ) -> TeacherNoticeListResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        class_ids = await self._get_teacher_class_ids(teacher)
+        notices = await self.notice_repository.list_for_teacher(class_ids)
+        total_count = len(notices)
+
+        start = (page - 1) * size
+        page_notices = notices[start : start + size]
+
+        author_names = await self._resolve_author_names(
+            {notice.author_id for notice in page_notices}
+        )
+
+        items = [
+            NoticeItem(
+                notice_id=notice.notice_id,
+                title=notice.title or "",
+                content=notice.content or "",
+                author_name=author_names.get(notice.author_id, ""),
+                created_at=notice.created_at,
+                is_new=compute_is_new(notice.created_at),
+            )
+            for notice in page_notices
+        ]
+
+        return TeacherNoticeListResponse(total_count=total_count, notices=items)
 
     async def create_teacher_notice(
         self,
