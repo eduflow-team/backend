@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     STAGE2_LOCATION_THRESHOLD: float = 0.8
     STAGE2_REASONING_THRESHOLD: float = 0.95
     STAGE2_CORRECTION_MIN_SCORE: int = 4
+    STAGE2_CHUNK_SIZE: int = 400
+    STAGE2_MIN_CHUNK_CHARS: int = 30
+    STAGE2_MAX_CHUNK_CANDIDATES: int = 5
+    STAGE2_MAX_CANDIDATE_TOTAL_CHARS: int = 4000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

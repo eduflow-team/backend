@@ -44,6 +44,12 @@ def test_import_stage2_index_calculator() -> None:
     assert apply_server_error_indices is not None
 
 
+def test_import_stage2_chunk_candidates() -> None:
+    from app.services.stage2_chunk_candidates import build_stage2_chunk_candidates
+
+    assert build_stage2_chunk_candidates is not None
+
+
 def test_import_highlight_grader() -> None:
     from app.services.grading.highlight_grader import HighlightGrader
 
