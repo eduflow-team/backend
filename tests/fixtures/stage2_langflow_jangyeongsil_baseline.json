@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "source": "ai/baseline-results/stage2-20260727/jangyeongsil-baseline-run3.json",
+    "case_id": "jangyeongsil-baseline",
+    "note": "Pre-refactor Langflow baseline snapshot. Original run had incorrect indices and merged evidence_sentence."
+  },
+  "input": {
+    "document_text": "장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.\n자격루는 물의 흐름을 이용해 시간을 알리는 자동 물시계이고, 측우기는 비의 양을 재는 기구입니다.",
+    "question": "장영실의 발명품에 대해 설명해줘.",
+    "persona": "장영실이 연을 만들었다고 믿고, 자격루를 서양 기술이라고 주장하는 선생님",
+    "hallucination_types": ["RETRIEVAL_ERROR", "PERSONA_BIAS"],
+    "expected_error_count": 2
+  },
+  "langflow_result": {
+    "flawed_ai_response": "장영실은 정말 뛰어난 발명가였어요. 특히 자격루는 사실 서양에서 온 기계를 조선 시대에 맞게 발전시킨 것이라고 알려져 있어요. 물이 흐르는 원리를 이용해 시간을 정확히 측정하는 그 기술은 당시 사람들에게 큰 놀라움을 안겨줬죠. 장영실은 자격루뿐만 아니라, 하늘을 나는 연을 만들어 실험했다는 이야기도 있어요.",
+    "generated_errors": [
+      {
+        "error_sentence": "특히 자격루는 사실 서양에서 온 기계를 조선 시대에 맞게 발전시킨 것이라고 알려져 있어요.",
+        "error_type": "RETRIEVAL_ERROR",
+        "start_index": 0,
+        "end_index": 0,
+        "correct_sentence": "자격루는 물의 흐름을 이용해 시간을 알리는 자동 물시계입니다.",
+        "hallucination_reason": "참고 문서에는 자격루가 서양에서 온 기술이라는 내용이 없고, 조선의 독자적 발명으로 설명되어 있어 잘못된 검색·인용 오류입니다.",
+        "evidence_sentence": "자격루는 물의 흐름을 이용해 시간을 알리는 자동 물시계이고, 측우기는 비의 양을 재는 기구입니다."
+      },
+      {
+        "error_sentence": "장영실은 자격루뿐만 아니라, 하늘을 나는 연을 만들어 실험했다는 이야기도 있어요.",
+        "error_type": "PERSONA_BIAS",
+        "start_index": 0,
+        "end_index": 0,
+        "correct_sentence": "장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.",
+        "hallucination_reason": "페르소나가 믿는 연 발명 이야기를 사실처럼 서술한 편향 오류입니다.",
+        "evidence_sentence": "장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다."
+      }
+    ]
+  }
+}
