@@ -8,23 +8,26 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
 
 import httpx
+from pydantic import ValidationError
 
 from app.core.config import settings
 from app.core.exceptions import (
     Stage1LangflowServiceUnavailableError,
     Stage2LangflowServiceUnavailableError,
 )
+from app.schemas.stage2_generation import (
+    Stage2GeneratedErrorDraft,
+    Stage2LangflowGenerationResult,
+    parse_stage2_langflow_generation_result,
+)
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class Stage2LangflowResult:
-    flawed_ai_response: str
-    generated_errors: list[dict]
+# Backward-compatible alias; canonical type lives in stage2_generation.
+Stage2LangflowResult = Stage2LangflowGenerationResult
 
 
 class LangflowClient:
@@ -227,21 +230,25 @@ class LangflowClient:
             raise Stage2LangflowServiceUnavailableError()
 
         flawed = _strip_markdown(texts[0])
-        errors: list[dict] = []
+        raw_errors: list = []
         if len(texts) > 1:
             raw = texts[1].strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
-                errors = parsed.get("generated_errors", [])
+                raw_errors = parsed.get("generated_errors", [])
             elif isinstance(parsed, list):
-                errors = parsed
+                raw_errors = parsed
 
-        return Stage2LangflowResult(
-            flawed_ai_response=flawed,
-            generated_errors=errors,
-        )
+        try:
+            return parse_stage2_langflow_generation_result(
+                flawed_ai_response=flawed,
+                raw_errors=raw_errors,
+            )
+        except ValidationError as exc:
+            logger.exception("stage2 langflow output validation failed")
+            raise Stage2LangflowServiceUnavailableError() from exc
 
     def _mock_stage2_hallucination(
         self,
@@ -299,7 +306,7 @@ class LangflowClient:
             },
         ]
 
-        errors: list[dict] = []
+        errors: list[Stage2GeneratedErrorDraft] = []
         for index in range(expected_error_count):
             item = dict(templates[index % len(templates)])
             if index == 1:
@@ -312,9 +319,9 @@ class LangflowClient:
             end = start + len(str(item["error_sentence"]))
             item["start_index"] = start
             item["end_index"] = end
-            errors.append(item)
+            errors.append(Stage2GeneratedErrorDraft.model_validate(item))
 
-        return Stage2LangflowResult(
+        return Stage2LangflowGenerationResult(
             flawed_ai_response=flawed,
             generated_errors=errors,
         )

@@ -14,10 +14,12 @@ def test_import_stage2_schemas() -> None:
         Stage2CreateResponse,
         Stage2GeneratedErrorItem,
     )
+    from app.schemas.stage2_generation import Stage2LangflowGenerationResult
 
     assert "PERSONA_BIAS" in ALLOWED_HALLUCINATION_TYPES
     assert Stage2CreateResponse is not None
     assert Stage2GeneratedErrorItem is not None
+    assert Stage2LangflowGenerationResult is not None
 
 
 def test_import_stage2_service() -> None:

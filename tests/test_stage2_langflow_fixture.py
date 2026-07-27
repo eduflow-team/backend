@@ -86,5 +86,5 @@ def test_langflow_client_parses_baseline_fixture(
 
     assert parsed.flawed_ai_response == result_data["flawed_ai_response"]
     assert len(parsed.generated_errors) == len(result_data["generated_errors"])
-    assert parsed.generated_errors[0]["error_type"] == "RETRIEVAL_ERROR"
-    assert parsed.generated_errors[1]["error_type"] == "PERSONA_BIAS"
+    assert parsed.generated_errors[0].error_type == "RETRIEVAL_ERROR"
+    assert parsed.generated_errors[1].error_type == "PERSONA_BIAS"

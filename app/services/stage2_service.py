@@ -206,13 +206,13 @@ class Stage2Service:
             row = Stage2ErrorAnswer(
                 assignment_id=assignment.assignment_id,
                 detail_id=detail.detail_id,
-                error_sentence=error.get("error_sentence"),
-                error_type=error.get("error_type"),
-                start_index=error.get("start_index"),
-                end_index=error.get("end_index"),
-                correct_sentence=error.get("correct_sentence"),
-                hallucination_reason=error.get("hallucination_reason"),
-                evidence_sentence=error.get("evidence_sentence"),
+                error_sentence=error.error_sentence,
+                error_type=error.error_type,
+                start_index=error.start_index,
+                end_index=error.end_index,
+                correct_sentence=error.correct_sentence,
+                hallucination_reason=error.hallucination_reason,
+                evidence_sentence=error.evidence_sentence,
             )
             row = await self.stage2_error_answer_repository.create(row)
             response_errors.append(
