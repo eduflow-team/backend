@@ -50,6 +50,12 @@ def test_import_stage2_chunk_candidates() -> None:
     assert build_stage2_chunk_candidates is not None
 
 
+def test_import_stage2_retrieval_input() -> None:
+    from app.services.stage2_retrieval_input import build_stage2_retrieval_input
+
+    assert build_stage2_retrieval_input is not None
+
+
 def test_import_highlight_grader() -> None:
     from app.services.grading.highlight_grader import HighlightGrader
 

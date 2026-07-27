@@ -5,13 +5,33 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.schemas.stage2 import ALLOWED_HALLUCINATION_TYPES
 
 ALLOWED_RETRIEVAL_SOURCES = frozenset({"SAME_DOCUMENT", "SYNTHETIC"})
+
+
+class Stage2RetrievalCandidate(BaseModel):
+    """Langflow Planner에 전달하는 동일 PDF 청크 후보."""
+
+    chunk_id: str = Field(..., min_length=1)
+    source_index: int = Field(..., ge=0)
+    text: str = Field(..., min_length=1)
+    relevance_score: float = Field(..., ge=0.0, le=1.0)
+    selection_bucket: Literal["TOP_RELEVANCE", "DIVERSE_CONTEXT"]
+
+
+class Stage2RetrievalInput(BaseModel):
+    """동일 문서 우선, 부적합 시 synthetic fallback을 허용하는 입력 계약."""
+
+    strategy: Literal["SAME_DOCUMENT_THEN_SYNTHETIC"] = (
+        "SAME_DOCUMENT_THEN_SYNTHETIC"
+    )
+    candidate_chunks: list[Stage2RetrievalCandidate]
+    synthetic_fallback_allowed: bool = True
 
 
 class Stage2GeneratedErrorDraft(BaseModel):
@@ -108,6 +128,8 @@ __all__ = [
     "ALLOWED_RETRIEVAL_SOURCES",
     "Stage2GeneratedErrorDraft",
     "Stage2LangflowGenerationResult",
+    "Stage2RetrievalCandidate",
+    "Stage2RetrievalInput",
     "ValidationError",
     "parse_stage2_generated_errors",
     "parse_stage2_langflow_generation_result",
