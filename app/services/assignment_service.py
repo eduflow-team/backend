@@ -480,16 +480,18 @@ class AssignmentService:
     async def _embed_preset_chunk_sets(
         self, raw_text: str
     ) -> list[tuple[int, list[tuple[str, list[float]]]]]:
-        """preset chunk_size마다 청킹 후 임베딩을 병렬 수행한다."""
+        """preset chunk_size마다 청킹 후 임베딩한다. 동시성은 최대 2로 제한."""
 
         presets = settings.STAGE1_CHUNK_SIZE_PRESETS
+        sem = asyncio.Semaphore(2)
 
         async def _one(size: int) -> tuple[int, list[tuple[str, list[float]]]]:
-            chunks = split_text_into_chunks(raw_text, size)
-            if not chunks:
-                raise Stage1DocumentProcessingError()
-            embeddings = await embed_texts(chunks)
-            return size, list(zip(chunks, embeddings, strict=True))
+            async with sem:
+                chunks = split_text_into_chunks(raw_text, size)
+                if not chunks:
+                    raise Stage1DocumentProcessingError()
+                embeddings = await embed_texts(chunks)
+                return size, list(zip(chunks, embeddings, strict=True))
 
         return list(await asyncio.gather(*[_one(size) for size in presets]))
 
