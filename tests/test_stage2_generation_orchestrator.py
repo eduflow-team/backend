@@ -59,9 +59,12 @@ def _valid_pair() -> tuple[Stage2GeneratedErrorDraft, Stage2GeneratedErrorDraft]
     )
 
 
-def _langflow_result(*errors: Stage2GeneratedErrorDraft) -> Stage2LangflowGenerationResult:
+def _langflow_result(
+    *errors: Stage2GeneratedErrorDraft,
+    flawed_ai_response: str = FLAWED_RESPONSE,
+) -> Stage2LangflowGenerationResult:
     return Stage2LangflowGenerationResult(
-        flawed_ai_response=FLAWED_RESPONSE,
+        flawed_ai_response=flawed_ai_response,
         generated_errors=list(errors),
     )
 
@@ -139,6 +142,40 @@ async def test_orchestrator_retries_once_and_succeeds_on_second_attempt() -> Non
 
     second_call_kwargs = langflow_client.run_stage2_hallucination.await_args_list[1].kwargs
     assert "ERROR_COUNT_MISMATCH" in second_call_kwargs["validation_feedback"]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_retries_answer_quality_failure_with_feedback() -> None:
+    langflow_client = AsyncMock()
+    langflow_client.run_stage2_hallucination = AsyncMock(
+        side_effect=[
+            _langflow_result(
+                *_valid_pair(),
+                flawed_ai_response=(
+                    f"{FLAWED_RESPONSE} [[ERROR1]] "
+                    "이건 제가 잘못 이해한 부분이에요."
+                ),
+            ),
+            _langflow_result(*_valid_pair()),
+        ]
+    )
+
+    orchestrator = Stage2GenerationOrchestrator(langflow_client=langflow_client)
+    pipeline = await orchestrator.generate(
+        document_text=DOCUMENT_TEXT,
+        question="질문",
+        persona="페르소나",
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=2,
+    )
+
+    assert pipeline.is_ready_for_save is True
+    assert pipeline.generation_attempts == 2
+    feedback = langflow_client.run_stage2_hallucination.await_args_list[1].kwargs[
+        "validation_feedback"
+    ]
+    assert "SLOT_MARKER_REMAINING" in feedback
+    assert "ANSWER_LEAKAGE_DETECTED" in feedback
 
 
 @pytest.mark.asyncio

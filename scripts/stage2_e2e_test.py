@@ -66,7 +66,25 @@ def submit_highlight(
 def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     api = f"{ROOT.rstrip('/')}{BASE}"
-    allowed_types = {"PERSONA_BIAS", "RETRIEVAL_ERROR"}
+    allowed_types = {
+        value.strip().upper()
+        for value in os.getenv(
+            "STAGE2_TEST_HALLUCINATION_TYPES",
+            "PERSONA_BIAS,RETRIEVAL_ERROR",
+        ).split(",")
+        if value.strip()
+    }
+    expected_error_count = int(
+        os.getenv("STAGE2_TEST_EXPECTED_ERROR_COUNT", str(len(allowed_types)))
+    )
+    question = os.getenv(
+        "STAGE2_TEST_QUESTION",
+        "장영실의 발명품에 대해 설명해줘.",
+    )
+    persona = os.getenv(
+        "STAGE2_TEST_PERSONA",
+        "장영실이 연을 만들었다고 믿는 선생님",
+    )
     document_text = FIXTURE.read_text(encoding="utf-8")
 
     classes = httpx.get(f"{api}/auth/classes", timeout=30.0)
@@ -112,12 +130,12 @@ def main() -> None:
             data={
                 "title": "2단계 E2E 테스트",
                 "subject": "hist",
-                "question": "장영실의 발명품에 대해 설명해줘.",
-                "persona": "장영실이 연을 만들었다고 믿는 선생님",
+                "question": question,
+                "persona": persona,
                 "hallucination_types": json.dumps(
                     sorted(allowed_types), ensure_ascii=False
                 ),
-                "expected_error_count": "2",
+                "expected_error_count": str(expected_error_count),
             },
             files={"file": ("stage2_doc.txt", doc, "text/plain")},
             timeout=180.0,
@@ -129,7 +147,7 @@ def main() -> None:
     try:
         validate_stage2_create_response(
             create_body,
-            expected_error_count=2,
+            expected_error_count=expected_error_count,
             allowed_types=allowed_types,
             document_text=document_text,
         )
@@ -155,7 +173,7 @@ def main() -> None:
     detail_body = detail.json()
     if detail_body["flawed_ai_response"] != create_body["flawed_ai_response"]:
         fail("detail flawed_ai_response mismatch")
-    if detail_body["expected_error_count"] != 2:
+    if detail_body["expected_error_count"] != expected_error_count:
         fail("detail expected_error_count mismatch")
 
     last_highlight_body = None
@@ -188,8 +206,8 @@ def main() -> None:
     correction_body = correction.json()
     if not correction_body.get("is_passed"):
         fail(f"correction not passed: {json.dumps(correction_body, ensure_ascii=False)[:500]}")
-    if len(correction_body.get("feedback_details", [])) != 2:
-        fail("feedback_details length should be 2")
+    if len(correction_body.get("feedback_details", [])) != expected_error_count:
+        fail(f"feedback_details length should be {expected_error_count}")
 
     print("OK stage2 e2e")
     print(f"assignment_id={assignment_id}")

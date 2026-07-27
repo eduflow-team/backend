@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from app.schemas.stage2 import ALLOWED_HALLUCINATION_TYPES
+from app.services.stage2_response_quality import (
+    find_stage2_response_quality_codes,
+    has_similar_response_sentence,
+)
 
 
 class Stage2E2EValidationError(ValueError):
@@ -58,8 +62,26 @@ def validate_generated_error_item(
         raise Stage2E2EValidationError("invalid index span")
     if flawed_ai_response[start_index:end_index] != error_sentence:
         raise Stage2E2EValidationError("index span does not match error_sentence")
+    if has_similar_response_sentence(
+        correct_sentence,
+        flawed_ai_response=flawed_ai_response,
+        match_threshold=0.8,
+    ):
+        raise Stage2E2EValidationError("correct_sentence exposed in flawed_ai_response")
+    if has_similar_response_sentence(
+        error_sentence,
+        flawed_ai_response=flawed_ai_response,
+        match_threshold=0.8,
+        exclude_exact=True,
+    ):
+        raise Stage2E2EValidationError(
+            "unlabeled similar error found in flawed_ai_response"
+        )
 
-    if document_text and evidence_sentence not in document_text:
+    if (
+        document_text
+        and "".join(evidence_sentence.split()) not in "".join(document_text.split())
+    ):
         raise Stage2E2EValidationError("evidence_sentence not found in document_text")
 
 
@@ -89,6 +111,12 @@ def validate_stage2_create_response(
     flawed_ai_response = (body.get("flawed_ai_response") or "").strip()
     if not flawed_ai_response:
         raise Stage2E2EValidationError("flawed_ai_response is empty")
+    response_quality_codes = find_stage2_response_quality_codes(flawed_ai_response)
+    if response_quality_codes:
+        raise Stage2E2EValidationError(
+            "flawed_ai_response quality failure: "
+            + ", ".join(str(code) for code in response_quality_codes)
+        )
 
     generated_errors = body.get("generated_errors")
     if not isinstance(generated_errors, list):
@@ -111,3 +139,11 @@ def validate_stage2_create_response(
 
     if allowed_types and not seen_types <= set(allowed_types):
         raise Stage2E2EValidationError("generated error types exceed teacher selection")
+    if (
+        allowed_types
+        and expected_error_count >= len(allowed_types)
+        and not set(allowed_types) <= seen_types
+    ):
+        raise Stage2E2EValidationError(
+            "generated error types do not cover teacher selection"
+        )

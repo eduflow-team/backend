@@ -45,6 +45,9 @@ _FEEDBACK_HINTS: dict[str, str] = {
     "INVALID_ERROR_TYPE": (
         "error_type은 교사가 선택한 hallucination_types만 사용하세요."
     ),
+    "ERROR_TYPE_COVERAGE_MISMATCH": (
+        "오류 개수가 허용 유형 수 이상이면 선택한 각 error_type을 최소 한 번 사용하세요."
+    ),
     "DUPLICATED_ERROR": (
         "서로 다른 error_sentence를 사용하고 중복 오류를 만들지 마세요."
     ),
@@ -53,6 +56,18 @@ _FEEDBACK_HINTS: dict[str, str] = {
     ),
     "ERROR_SENTENCE_AMBIGUOUS": (
         "error_sentence가 답변 본문에서 한 번만 등장하도록 문장을 단순화하세요."
+    ),
+    "SLOT_MARKER_REMAINING": (
+        "[[ERROR_N]] 슬롯을 정확히 한 번씩 사용하고 다른 슬롯 표기를 남기지 마세요."
+    ),
+    "ANSWER_LEAKAGE_DETECTED": (
+        "학생용 답변에서 오류임을 밝히거나 정답을 암시하는 설명을 제거하세요."
+    ),
+    "CORRECT_ANSWER_EXPOSED": (
+        "오류에 대응하는 correct_sentence를 학생용 답변의 정상 문장으로 노출하지 마세요."
+    ),
+    "UNLABELED_ERROR_DUPLICATE": (
+        "각 계획 오류는 해당 슬롯에서만 한 번 말하고 유사한 오류 문장을 추가하지 마세요."
     ),
 }
 

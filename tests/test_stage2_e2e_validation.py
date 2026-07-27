@@ -88,6 +88,41 @@ def test_validate_create_response_rejects_count_mismatch() -> None:
         )
 
 
+def test_validate_create_response_rejects_missing_selected_type() -> None:
+    with pytest.raises(Stage2E2EValidationError, match="do not cover"):
+        validate_stage2_create_response(
+            _create_body(
+                _error_item(answer_id=1),
+                _error_item(answer_id=2),
+            ),
+            expected_error_count=2,
+            allowed_types=ALLOWED_TYPES,
+            document_text=DOCUMENT_TEXT,
+        )
+
+
+@pytest.mark.parametrize(
+    ("invalid_text", "expected_code"),
+    [
+        (f"{FLAWED} [[ERROR1]]", "SLOT_MARKER_REMAINING"),
+        (f"{FLAWED} 이건 제가 잘못 이해한 부분이에요.", "ANSWER_LEAKAGE_DETECTED"),
+    ],
+)
+def test_validate_create_response_rejects_student_answer_quality_leaks(
+    invalid_text: str,
+    expected_code: str,
+) -> None:
+    body = _create_body(_error_item())
+    body["flawed_ai_response"] = invalid_text
+    with pytest.raises(Stage2E2EValidationError, match=expected_code):
+        validate_stage2_create_response(
+            body,
+            expected_error_count=1,
+            allowed_types=ALLOWED_TYPES,
+            document_text=DOCUMENT_TEXT,
+        )
+
+
 def test_validate_generated_error_rejects_bad_index_span() -> None:
     with pytest.raises(Stage2E2EValidationError, match="index span"):
         validate_generated_error_item(
@@ -104,6 +139,45 @@ def test_validate_generated_error_rejects_missing_evidence_in_document() -> None
             flawed_ai_response=FLAWED,
             allowed_types=ALLOWED_TYPES,
             document_text=DOCUMENT_TEXT,
+        )
+
+
+def test_validate_generated_error_accepts_evidence_with_normalized_whitespace() -> None:
+    validate_generated_error_item(
+        _error_item(
+            evidence_sentence=(
+                "자격루는 물의 흐름을 이용해 시간을 알리는 자동 물시계이고,\n"
+                "측우기는 비의 양을 재는 기구입니다."
+            )
+        ),
+        flawed_ai_response=FLAWED,
+        allowed_types=ALLOWED_TYPES,
+        document_text=DOCUMENT_TEXT,
+    )
+
+
+def test_validate_generated_error_rejects_exposed_correct_answer() -> None:
+    with pytest.raises(Stage2E2EValidationError, match="correct_sentence exposed"):
+        validate_generated_error_item(
+            _error_item(),
+            flawed_ai_response=(
+                f"{FLAWED} "
+                "자격루는 물의 흐름을 이용해 시간을 알리는 자동 물시계입니다."
+            ),
+            allowed_types=ALLOWED_TYPES,
+        )
+
+
+def test_validate_generated_error_rejects_unlabeled_similar_error() -> None:
+    with pytest.raises(Stage2E2EValidationError, match="unlabeled similar error"):
+        validate_generated_error_item(
+            _error_item(),
+            flawed_ai_response=(
+                f"{FLAWED} "
+                "특히 자격루는 서양에서 온 기계를 조선 시대에 맞게 "
+                "발전시킨 것이라고 알려져 있어요."
+            ),
+            allowed_types=ALLOWED_TYPES,
         )
 
 

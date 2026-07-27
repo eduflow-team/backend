@@ -40,9 +40,12 @@ def _error(**overrides: Any) -> Stage2GeneratedErrorDraft:
     return Stage2GeneratedErrorDraft.model_validate(base)
 
 
-def _result(*errors: Stage2GeneratedErrorDraft) -> Stage2LangflowGenerationResult:
+def _result(
+    *errors: Stage2GeneratedErrorDraft,
+    flawed_ai_response: str = FLAWED_RESPONSE,
+) -> Stage2LangflowGenerationResult:
     return Stage2LangflowGenerationResult(
-        flawed_ai_response=FLAWED_RESPONSE,
+        flawed_ai_response=flawed_ai_response,
         generated_errors=list(errors),
     )
 
@@ -112,6 +115,74 @@ def test_error_sentence_not_found() -> None:
     assert Stage2GenerationValidationCode.ERROR_SENTENCE_NOT_FOUND in validation.codes
 
 
+@pytest.mark.parametrize("marker", ["[[ERROR_1]]", "[[ERROR1]]", "[[ error_1 ]]"])
+def test_slot_marker_remaining_is_rejected(marker: str) -> None:
+    validation = validate_stage2_generation_result(
+        result=_result(_error(), flawed_ai_response=f"{FLAWED_RESPONSE} {marker}"),
+        document_text=DOCUMENT_TEXT,
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=1,
+    )
+    assert Stage2GenerationValidationCode.SLOT_MARKER_REMAINING in validation.codes
+
+
+@pytest.mark.parametrize(
+    "leakage",
+    [
+        "이건 제가 잘못 이해한 부분이에요.",
+        "하지만 그건 사실이 아니에요.",
+        "조금 헷갈리는 부분도 있어요.",
+        "연을 만들었다고 알려져 있지만, 사실 다른 발명품을 만들었어요.",
+        "하지만 사실 장영실의 주된 업적은 다른 데 있어요.",
+        "정확한 기능을 기억해두면 좋겠어요.",
+    ],
+)
+def test_answer_leakage_is_rejected(leakage: str) -> None:
+    validation = validate_stage2_generation_result(
+        result=_result(
+            _error(),
+            flawed_ai_response=f"{FLAWED_RESPONSE} {leakage}",
+        ),
+        document_text=DOCUMENT_TEXT,
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=1,
+    )
+    assert Stage2GenerationValidationCode.ANSWER_LEAKAGE_DETECTED in validation.codes
+
+
+def test_correct_answer_exposure_is_rejected() -> None:
+    validation = validate_stage2_generation_result(
+        result=_result(
+            _error(),
+            flawed_ai_response=(
+                f"{FLAWED_RESPONSE} "
+                "자격루는 물의 흐름을 이용해 시간을 알리는 자동 물시계입니다."
+            ),
+        ),
+        document_text=DOCUMENT_TEXT,
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=1,
+    )
+    assert Stage2GenerationValidationCode.CORRECT_ANSWER_EXPOSED in validation.codes
+
+
+def test_unlabeled_similar_error_is_rejected() -> None:
+    validation = validate_stage2_generation_result(
+        result=_result(
+            _error(),
+            flawed_ai_response=(
+                f"{FLAWED_RESPONSE} "
+                "특히 자격루는 서양에서 온 기계를 조선 시대에 맞게 "
+                "발전시킨 것이라고 알려져 있어요."
+            ),
+        ),
+        document_text=DOCUMENT_TEXT,
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=1,
+    )
+    assert Stage2GenerationValidationCode.UNLABELED_ERROR_DUPLICATE in validation.codes
+
+
 def test_evidence_not_found() -> None:
     validation = validate_stage2_generation_result(
         result=_result(_error(evidence_sentence="PDF에 없는 근거 문장입니다.")),
@@ -135,6 +206,24 @@ def test_invalid_error_type_not_in_teacher_selection() -> None:
         expected_error_count=1,
     )
     assert Stage2GenerationValidationCode.INVALID_ERROR_TYPE in validation.codes
+
+
+def test_selected_error_types_must_be_covered_when_count_allows() -> None:
+    validation = validate_stage2_generation_result(
+        result=_result(
+            _error(),
+            _error(
+                error_sentence="장영실은 자격루뿐만 아니라, 하늘을 나는 연을 만들어 실험했다는 이야기도 있어요.",
+            ),
+        ),
+        document_text=DOCUMENT_TEXT,
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=2,
+    )
+    assert (
+        Stage2GenerationValidationCode.ERROR_TYPE_COVERAGE_MISMATCH
+        in validation.codes
+    )
 
 
 def test_duplicated_error_sentence() -> None:
