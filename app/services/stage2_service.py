@@ -76,6 +76,12 @@ from app.services.grading.highlight_grader import HighlightGrader
 from app.services.embedding_service import extract_text_from_upload
 from app.services.stage2_generation_orchestrator import Stage2GenerationOrchestrator
 from app.services.stage2_generation_metadata import build_stage2_generation_metadata
+from app.services.stage2_generation_logging import (
+    log_stage2_generation_failed,
+    log_stage2_generation_started,
+    log_stage2_generation_succeeded,
+    summarize_error_type_counts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,17 +162,26 @@ class Stage2Service:
             logger.exception("stage2 document processing failed")
             raise Stage2DocumentProcessingError() from exc
 
+        log_stage2_generation_started(
+            teacher_user_id=teacher.user_id,
+            expected_error_count=expected_error_count,
+            hallucination_types=hallucination_types,
+            filename=filename,
+        )
+
         pipeline = await self.generation_orchestrator.generate(
             document_text=raw_text,
             question=question,
             persona=persona,
             hallucination_types=hallucination_types,
             expected_error_count=expected_error_count,
+            teacher_user_id=teacher.user_id,
         )
         if not pipeline.is_ready_for_save:
-            logger.error(
-                "stage2 generation result not ready for save: %s",
-                ",".join(pipeline.failure_codes),
+            log_stage2_generation_failed(
+                teacher_user_id=teacher.user_id,
+                generation_attempts=pipeline.generation_attempts,
+                failure_codes=pipeline.failure_codes,
             )
             raise Stage2LangflowServiceUnavailableError()
 
@@ -250,6 +265,13 @@ class Stage2Service:
                 if parent.exists() and not any(parent.iterdir()):
                     parent.rmdir()
             raise
+
+        log_stage2_generation_succeeded(
+            teacher_user_id=teacher.user_id,
+            assignment_id=assignment.assignment_id,
+            generation_attempts=pipeline.generation_attempts,
+            error_type_counts=summarize_error_type_counts(generated_errors),
+        )
 
         return Stage2CreateResponse(
             assignment_id=assignment.assignment_id,

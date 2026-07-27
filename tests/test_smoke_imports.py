@@ -85,6 +85,12 @@ def test_import_stage2_generation_metadata() -> None:
     assert build_stage2_generation_metadata is not None
 
 
+def test_import_stage2_generation_logging() -> None:
+    from app.services.stage2_generation_logging import summarize_error_type_counts
+
+    assert summarize_error_type_counts is not None
+
+
 def test_import_highlight_grader() -> None:
     from app.services.grading.highlight_grader import HighlightGrader
 

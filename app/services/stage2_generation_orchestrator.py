@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 
 from app.clients.langflow_client import LangflowClient
@@ -22,6 +24,12 @@ from app.services.stage2_index_calculator import (
     apply_server_error_indices,
 )
 from app.services.stage2_retrieval_input import build_stage2_retrieval_input
+from app.services.stage2_generation_logging import (
+    log_stage2_generation_attempt,
+    log_stage2_generation_failed,
+)
+
+logger = logging.getLogger(__name__)
 
 _FEEDBACK_HINTS: dict[str, str] = {
     "ERROR_COUNT_MISMATCH": (
@@ -112,6 +120,7 @@ class Stage2GenerationOrchestrator:
         persona: str,
         hallucination_types: list[str],
         expected_error_count: int,
+        teacher_user_id: int | None = None,
     ) -> Stage2GenerationPipelineResult:
         retrieval_input = build_stage2_retrieval_input(
             document_text=document_text,
@@ -119,17 +128,28 @@ class Stage2GenerationOrchestrator:
         )
         max_attempts = settings.STAGE2_GENERATION_MAX_ATTEMPTS
         validation_feedback = ""
+        last_failure_codes: tuple[str, ...] = ()
 
         for attempt in range(1, max_attempts + 1):
-            langflow_result = await self.langflow_client.run_stage2_hallucination(
-                document_text=document_text,
-                question=question,
-                persona=persona,
-                hallucination_types=hallucination_types,
-                expected_error_count=expected_error_count,
-                retrieval_input=retrieval_input,
-                validation_feedback=validation_feedback,
-            )
+            started_at = time.perf_counter()
+            try:
+                langflow_result = await self.langflow_client.run_stage2_hallucination(
+                    document_text=document_text,
+                    question=question,
+                    persona=persona,
+                    hallucination_types=hallucination_types,
+                    expected_error_count=expected_error_count,
+                    retrieval_input=retrieval_input,
+                    validation_feedback=validation_feedback,
+                )
+            except Stage2LangflowServiceUnavailableError:
+                log_stage2_generation_failed(
+                    teacher_user_id=teacher_user_id,
+                    generation_attempts=attempt,
+                    failure_codes=("LANGFLOW_UNAVAILABLE",),
+                )
+                raise
+            duration_ms = (time.perf_counter() - started_at) * 1000
             validation = validate_stage2_generation_result(
                 result=langflow_result,
                 document_text=document_text,
@@ -150,12 +170,36 @@ class Stage2GenerationOrchestrator:
                 generation_attempts=attempt,
             )
             if pipeline.is_ready_for_save:
+                log_stage2_generation_attempt(
+                    teacher_user_id=teacher_user_id,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    duration_ms=duration_ms,
+                    failure_codes=(),
+                    will_retry=False,
+                )
                 return pipeline
 
-            if attempt < max_attempts:
+            last_failure_codes = pipeline.failure_codes
+            will_retry = attempt < max_attempts
+            log_stage2_generation_attempt(
+                teacher_user_id=teacher_user_id,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                duration_ms=duration_ms,
+                failure_codes=last_failure_codes,
+                will_retry=will_retry,
+            )
+
+            if will_retry:
                 validation_feedback = build_stage2_validation_feedback(
                     validation_codes=validation.codes,
                     index_codes=index_application.codes,
                 )
 
+        log_stage2_generation_failed(
+            teacher_user_id=teacher_user_id,
+            generation_attempts=max_attempts,
+            failure_codes=last_failure_codes,
+        )
         raise Stage2LangflowServiceUnavailableError()
