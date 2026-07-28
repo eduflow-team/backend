@@ -105,3 +105,13 @@ def test_ignores_unknown_extra_fields() -> None:
         _valid_error(unexpected_field="ignored")
     )
     assert draft.error_type == "RETRIEVAL_ERROR"
+
+
+def test_empty_retrieved_context_becomes_none() -> None:
+    draft = Stage2GeneratedErrorDraft.model_validate(
+        _valid_error(
+            error_type="PERSONA_BIAS",
+            retrieved_context="",
+        )
+    )
+    assert draft.retrieved_context is None

@@ -89,11 +89,10 @@ class Stage2GeneratedErrorDraft(BaseModel):
         "correct_sentence",
         "hallucination_reason",
         "evidence_sentence",
-        "retrieved_context",
         mode="before",
     )
     @classmethod
-    def strip_optional_text(cls, value: Any) -> Any:
+    def strip_required_text(cls, value: Any) -> Any:
         if value is None:
             return value
         if not isinstance(value, str):
@@ -102,6 +101,16 @@ class Stage2GeneratedErrorDraft(BaseModel):
         if not stripped:
             raise ValueError("must not be empty")
         return stripped
+
+    @field_validator("retrieved_context", mode="before")
+    @classmethod
+    def strip_optional_retrieved_context(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
 
     @field_validator("error_type")
     @classmethod
