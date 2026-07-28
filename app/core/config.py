@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     STAGE2_MIN_CHUNK_CHARS: int = 30
     STAGE2_MAX_CHUNK_CANDIDATES: int = 5
     STAGE2_MAX_CANDIDATE_TOTAL_CHARS: int = 4000
+    STAGE2_GENERATION_DOCUMENT_MAX_CHARS: int = 6000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -24,6 +24,7 @@ from app.services.stage2_index_calculator import (
     apply_server_error_indices,
 )
 from app.services.stage2_retrieval_input import build_stage2_retrieval_input
+from app.services.stage2_document_context import Stage2DocumentContext
 from app.services.stage2_generation_logging import (
     log_stage2_generation_attempt,
     log_stage2_generation_failed,
@@ -100,6 +101,7 @@ class Stage2GenerationPipelineResult:
     validation: Stage2GenerationValidationResult
     index_application: Stage2IndexApplicationResult
     generation_attempts: int = 1
+    document_context: Stage2DocumentContext | None = None
 
     @property
     def candidate_chunk_ids(self) -> list[str]:
@@ -136,8 +138,10 @@ class Stage2GenerationOrchestrator:
         hallucination_types: list[str],
         expected_error_count: int,
         teacher_user_id: int | None = None,
+        retrieval_input: Stage2RetrievalInput | None = None,
+        document_context: Stage2DocumentContext | None = None,
     ) -> Stage2GenerationPipelineResult:
-        retrieval_input = build_stage2_retrieval_input(
+        resolved_retrieval_input = retrieval_input or build_stage2_retrieval_input(
             document_text=document_text,
             question=question,
         )
@@ -154,7 +158,7 @@ class Stage2GenerationOrchestrator:
                     persona=persona,
                     hallucination_types=hallucination_types,
                     expected_error_count=expected_error_count,
-                    retrieval_input=retrieval_input,
+                    retrieval_input=resolved_retrieval_input,
                     validation_feedback=validation_feedback,
                 )
             except Stage2LangflowServiceUnavailableError:
@@ -179,10 +183,11 @@ class Stage2GenerationOrchestrator:
             )
             pipeline = Stage2GenerationPipelineResult(
                 result=final_result,
-                retrieval_input=retrieval_input,
+                retrieval_input=resolved_retrieval_input,
                 validation=validation,
                 index_application=index_application,
                 generation_attempts=attempt,
+                document_context=document_context,
             )
             if pipeline.is_ready_for_save:
                 log_stage2_generation_attempt(

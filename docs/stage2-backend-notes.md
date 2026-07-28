@@ -23,9 +23,10 @@ Form 필드: `title`, `subject`, `question`, `persona`, `hallucination_types`(JS
 교사 과제 생성 시 내부 흐름:
 
 ```text
-PDF 업로드 → raw_text 추출
-  → 청크 후보 생성 (build_stage2_chunk_candidates)
-  → Langflow 호출 (Planner → EXAONE → Formatter)
+PDF 업로드 → source_text 추출
+  → 질문 관련 excerpt 생성 (resolve_stage2_document_context)
+  → 청크 후보 생성 (build_stage2_chunk_candidates, 전체 source 기준)
+  → Langflow 호출 (Planner → EXAONE → Formatter, generation_text 사용)
   → 생성 결과 검증 (validate_stage2_generation_result)
   → 품질 Gate (슬롯·정답 노출·추가 오류 등)
   → start_index / end_index 서버 계산 (apply_server_error_indices)
@@ -34,10 +35,13 @@ PDF 업로드 → raw_text 추출
   → 최종 실패 시 503 (저장 없음)
 ```
 
+긴 PDF는 `STAGE2_GENERATION_DOCUMENT_MAX_CHARS`(기본 6000)를 넘으면 질문 관련 청크를 읽기 순으로 이어 붙인 excerpt만 Langflow·validator·학생 `reference_document_text`에 사용한다. 원본 PDF 파일은 디스크에 그대로 보관한다.
+
 주요 모듈:
 
 | 모듈 | 역할 |
 |------|------|
+| `stage2_document_context.py` | 질문 기준 excerpt (`generation_text`) 결정 |
 | `Stage2GenerationOrchestrator` | 청크 후보 → Langflow → 검증 → 인덱스 → 재시도 |
 | `stage2_generation_validator.py` | 구조·근거·유형·품질 검증 |
 | `stage2_response_quality.py` | 슬롯 잔존, 정답 암시/노출, 유사 추가 오류 탐지 |
@@ -193,6 +197,7 @@ Flow 상세·노드 ID: `ai/docs/stage2-langflow-contract.md`, `ai/flows/stage2-
 | `STAGE2_MAX_ATTEMPTS` | 5 | 학생 하이라이트 시도 횟수 |
 | `STAGE2_CHUNK_SIZE` | 400 | PDF 청크 크기 |
 | `STAGE2_MAX_CHUNK_CANDIDATES` | 5 | Langflow 전달 후보 수 |
+| `STAGE2_GENERATION_DOCUMENT_MAX_CHARS` | 6000 | Langflow/학생 참고문서 excerpt 상한 |
 
 ---
 
@@ -206,6 +211,8 @@ pytest -q
 pytest tests/test_stage2_api_contract.py -q
 
 # E2E (backend + Langflow + DB 필요)
+# 기본 fixture: scripts/fixtures/stage2_doc.txt
+# PDF 예: $env:STAGE2_TEST_FIXTURE="scripts/fixtures/your.pdf"
 python scripts/stage2_e2e_test.py
 ```
 

@@ -45,6 +45,9 @@ class Stage2GenerationMetadata(BaseModel):
     retrieved_context: str | None = None
     validation_codes: list[str] = Field(default_factory=list)
     candidate_chunk_ids: list[str] = Field(default_factory=list)
+    document_excerpt_applied: bool = False
+    source_char_count: int | None = Field(default=None, ge=0)
+    generation_char_count: int | None = Field(default=None, ge=0)
 
     @field_validator("retrieval_source")
     @classmethod

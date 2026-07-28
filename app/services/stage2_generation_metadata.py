@@ -30,4 +30,19 @@ def build_stage2_generation_metadata(
         ),
         validation_codes=[],
         candidate_chunk_ids=pipeline.candidate_chunk_ids,
+        document_excerpt_applied=(
+            pipeline.document_context.was_trimmed
+            if pipeline.document_context is not None
+            else False
+        ),
+        source_char_count=(
+            pipeline.document_context.source_char_count
+            if pipeline.document_context is not None
+            else None
+        ),
+        generation_char_count=(
+            pipeline.document_context.generation_char_count
+            if pipeline.document_context is not None
+            else None
+        ),
     )

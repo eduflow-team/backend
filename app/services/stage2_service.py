@@ -76,6 +76,8 @@ from app.services.grading.highlight_grader import HighlightGrader
 from app.services.embedding_service import extract_text_from_upload
 from app.services.stage2_generation_orchestrator import Stage2GenerationOrchestrator
 from app.services.stage2_generation_metadata import build_stage2_generation_metadata
+from app.services.stage2_document_context import resolve_stage2_document_context
+from app.services.stage2_retrieval_input import build_stage2_retrieval_input_from_candidates
 from app.services.stage2_generation_logging import (
     log_stage2_generation_failed,
     log_stage2_generation_started,
@@ -169,13 +171,23 @@ class Stage2Service:
             filename=filename,
         )
 
+        document_context = resolve_stage2_document_context(
+            source_text=raw_text,
+            question=question,
+        )
+        retrieval_input = build_stage2_retrieval_input_from_candidates(
+            document_context.chunk_candidates,
+        )
+
         pipeline = await self.generation_orchestrator.generate(
-            document_text=raw_text,
+            document_text=document_context.generation_text,
             question=question,
             persona=persona,
             hallucination_types=hallucination_types,
             expected_error_count=expected_error_count,
             teacher_user_id=teacher.user_id,
+            retrieval_input=retrieval_input,
+            document_context=document_context,
         )
         if not pipeline.is_ready_for_save:
             log_stage2_generation_failed(
@@ -210,7 +222,7 @@ class Stage2Service:
                 filename=filename,
                 file_path=str(saved_path),
                 file_type=suffix.lstrip("."),
-                raw_text=raw_text,
+                raw_text=document_context.generation_text,
             )
             document = await self.document_repository.create(document)
 

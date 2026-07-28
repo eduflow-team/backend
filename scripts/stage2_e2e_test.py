@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import sys
 import uuid
@@ -13,11 +14,15 @@ import httpx
 BASE = "/api/v1"
 ROOT = os.getenv("TEST_BASE_URL", "http://localhost:8000")
 TEACHER_CODE = os.getenv("TEACHER_SIGNUP_CODE", "TEACHER_SECRET_CODE")
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "stage2_doc.txt"
+DEFAULT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "stage2_doc.txt"
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.services.embedding_service import extract_text_from_upload  # noqa: E402
+from app.services.stage2_document_context import (  # noqa: E402
+    resolve_stage2_document_context,
+)
 from app.services.stage2_response_validation import (  # noqa: E402
     Stage2E2EValidationError,
     validate_stage2_create_response,
@@ -27,6 +32,37 @@ from app.services.stage2_response_validation import (  # noqa: E402
 def fail(msg: str) -> None:
     print(f"FAIL: {msg}")
     sys.exit(1)
+
+
+def resolve_fixture_path() -> Path:
+    env_path = os.getenv("STAGE2_TEST_FIXTURE", "").strip()
+    if env_path:
+        return Path(env_path)
+    return DEFAULT_FIXTURE
+
+
+def fixture_mime_type(fixture: Path) -> str:
+    guessed, _ = mimetypes.guess_type(fixture.name)
+    return guessed or "application/octet-stream"
+
+
+def load_document_context(fixture: Path, question: str):
+    content = fixture.read_bytes()
+    source_text = extract_text_from_upload(fixture.name, content)
+    return resolve_stage2_document_context(
+        source_text=source_text,
+        question=question,
+    )
+
+
+def build_student_reason(error: dict) -> str:
+    evidence = error.get("evidence_sentence", "").strip()
+    hallucination_reason = error.get("hallucination_reason", "").strip()
+    return (
+        f"참고 문서 근거 문장은 '{evidence}' 입니다. "
+        f"AI 답변의 '{error['error_sentence']}' 구간은 {hallucination_reason} "
+        f"따라서 {error['error_type']} 유형의 환각입니다."
+    )
 
 
 def submit_highlight(
@@ -40,12 +76,7 @@ def submit_highlight(
             {
                 "highlighted_text": error["error_sentence"],
                 "student_error_type": error["error_type"],
-                "student_reason": (
-                    "참고 문서에는 장영실이 세종 대에 자격루와 측우기를 발명한 "
-                    "조선시대 과학자라고 나와 있습니다. "
-                    f"AI 답변의 '{error['error_sentence']}' 구간은 문서와 다른 환각이며 "
-                    f"{error['error_type']} 유형에 해당합니다."
-                ),
+                "student_reason": build_student_reason(error),
             }
         ]
     }
@@ -66,6 +97,10 @@ def submit_highlight(
 def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     api = f"{ROOT.rstrip('/')}{BASE}"
+    fixture = resolve_fixture_path()
+    if not fixture.exists():
+        fail(f"fixture missing: {fixture}")
+
     allowed_types = {
         value.strip().upper()
         for value in os.getenv(
@@ -85,7 +120,8 @@ def main() -> None:
         "STAGE2_TEST_PERSONA",
         "장영실이 연을 만들었다고 믿는 선생님",
     )
-    document_text = FIXTURE.read_text(encoding="utf-8")
+    document_context = load_document_context(fixture, question)
+    document_text = document_context.generation_text
 
     classes = httpx.get(f"{api}/auth/classes", timeout=30.0)
     if classes.status_code != 200:
@@ -123,13 +159,13 @@ def main() -> None:
         timeout=30.0,
     ).json()["access_token"]
 
-    with FIXTURE.open("rb") as doc:
+    with fixture.open("rb") as doc:
         create = httpx.post(
             f"{api}/teacher/assignments/step2",
             headers={"Authorization": f"Bearer {teacher_token}"},
             data={
-                "title": "2단계 E2E 테스트",
-                "subject": "hist",
+                "title": os.getenv("STAGE2_TEST_TITLE", "2단계 E2E 테스트"),
+                "subject": os.getenv("STAGE2_TEST_SUBJECT", "hist"),
                 "question": question,
                 "persona": persona,
                 "hallucination_types": json.dumps(
@@ -137,7 +173,7 @@ def main() -> None:
                 ),
                 "expected_error_count": str(expected_error_count),
             },
-            files={"file": ("stage2_doc.txt", doc, "text/plain")},
+            files={"file": (fixture.name, doc, fixture_mime_type(fixture))},
             timeout=180.0,
         )
     if create.status_code != 201:
@@ -211,9 +247,13 @@ def main() -> None:
 
     print("OK stage2 e2e")
     print(f"assignment_id={assignment_id}")
+    print(f"fixture={fixture}")
     print(
         json.dumps(
             {
+                "document_excerpt_applied": document_context.was_trimmed,
+                "source_char_count": document_context.source_char_count,
+                "generation_char_count": document_context.generation_char_count,
                 "generated_error_types": [e["error_type"] for e in generated_errors],
                 "score": correction_body.get("score"),
             },

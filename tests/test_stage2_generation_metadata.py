@@ -131,5 +131,8 @@ def test_build_generation_metadata_from_ready_pipeline() -> None:
         retrieved_context="동일 PDF distractor 청크",
         validation_codes=[],
         candidate_chunk_ids=["chunk-0"],
+        document_excerpt_applied=False,
+        source_char_count=None,
+        generation_char_count=None,
     )
 
