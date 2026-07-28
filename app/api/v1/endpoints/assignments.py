@@ -11,6 +11,15 @@ from app.schemas.assignments import (
     Stage1SubmitRequest,
     Stage1SubmitResponse,
 )
+from app.schemas.stage4 import (
+    Stage4AssignmentDetailResponse,
+    Stage4ChatRequest,
+    Stage4ChatResponse,
+    Stage4CreateRequest,
+    Stage4CreateResponse,
+    Stage4SubmitRequest,
+    Stage4SubmitResponse,
+)
 from app.schemas.dashboard import ErrorDetail
 from app.schemas.stage2 import (
     Stage2AssignmentDetailResponse,
@@ -22,6 +31,7 @@ from app.schemas.stage2 import (
 )
 from app.services.assignment_service import AssignmentService
 from app.services.stage2_service import Stage2Service
+from app.services.stage4_service import Stage4Service
 
 router = APIRouter()
 
@@ -228,4 +238,95 @@ async def create_step2_assignment(
         hallucination_types_raw=hallucination_types,
         expected_error_count=expected_error_count,
         file=file,
+    )
+
+
+@router.post(
+    "/teacher/assignments/step4",
+    summary="4단계 과제 생성",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Stage4CreateResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+    },
+)
+async def create_step4_assignment(
+    payload: Stage4CreateRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage4CreateResponse:
+    return await Stage4Service(db).create_step4_assignment(user_id=user_id, payload=payload)
+
+
+@router.get(
+    "/student/assignments/{id}/step4",
+    summary="4단계 과제 상세 조회",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage4AssignmentDetailResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step4_assignment(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage4AssignmentDetailResponse:
+    return await Stage4Service(db).get_step4_assignment(user_id=user_id, assignment_id=id)
+
+
+@router.post(
+    "/student/assignments/{id}/step4/chat",
+    summary="공격 채팅 (프롬프트 인젝션)",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage4ChatResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
+)
+async def chat_step4_assignment(
+    id: int,
+    payload: Stage4ChatRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage4ChatResponse:
+    return await Stage4Service(db).chat_step4(
+        user_id=user_id,
+        assignment_id=id,
+        attack_prompt=payload.attack_prompt,
+    )
+
+
+@router.post(
+    "/student/assignments/{id}/step4/submit",
+    summary="보안 분석 보고서 제출",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage4SubmitResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def submit_step4_assignment(
+    id: int,
+    payload: Stage4SubmitRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage4SubmitResponse:
+    return await Stage4Service(db).submit_step4_report(
+        user_id=user_id,
+        assignment_id=id,
+        payload=payload,
     )

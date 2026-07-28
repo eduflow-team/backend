@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     LANGFLOW_STAGE2_GEN_PROMPT_NODE_ID: str = ""
     LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID: str = ""
 
+    # Stage 4 (프롬프트 인젝션)
+    LANGFLOW_STAGE4_CHAT_FLOW_ID: str = ""
+    LANGFLOW_STAGE4_PROMPT_NODE_ID: str = ""
+
     # Stage 1 업로드 제한
     STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
     STAGE1_MAX_ATTEMPTS: int = 3
