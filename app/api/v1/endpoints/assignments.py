@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user_id
@@ -105,6 +106,32 @@ async def get_step2_assignment(
     db: AsyncSession = Depends(get_db),
 ) -> Stage2AssignmentDetailResponse:
     return await Stage2Service(db).get_step2_assignment(user_id, id)
+
+
+@router.get(
+    "/student/assignments/{id}/step2/document",
+    summary="2단계 참고 문서(PDF) 조회",
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step2_reference_document(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    path, filename, media_type = await Stage2Service(db).get_step2_reference_document(
+        user_id, id
+    )
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.post(

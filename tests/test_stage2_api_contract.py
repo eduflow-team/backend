@@ -73,6 +73,8 @@ DETAIL_RESPONSE_FIELDS = frozenset(
     {
         "assignment_id",
         "title",
+        "reference_document_filename",
+        "reference_document_url",
         "reference_document_text",
         "question",
         "flawed_ai_response",
@@ -402,7 +404,12 @@ async def test_get_detail_response_matches_external_contract() -> None:
         return_value=_detail()
     )
     service.document_repository.get_by_id = AsyncMock(
-        return_value=Document(document_id=502, raw_text=DOCUMENT_TEXT)
+        return_value=Document(
+            document_id=502,
+            raw_text=DOCUMENT_TEXT,
+            filename="stage2_doc.pdf",
+            file_path="uploads/stage2/42/stage2_doc.pdf",
+        )
     )
     service.status_repository.get_or_create = AsyncMock(
         return_value=StudentAssignmentStatus(
@@ -419,6 +426,8 @@ async def test_get_detail_response_matches_external_contract() -> None:
 
     assert set(parsed.model_fields) == DETAIL_RESPONSE_FIELDS
     assert parsed.assignment_id == 42
+    assert parsed.reference_document_filename == "stage2_doc.pdf"
+    assert parsed.reference_document_url.endswith("/student/assignments/42/step2/document")
     assert parsed.expected_error_count == 1
     assert len(parsed.hallucination_type_options) == 3
     assert set(parsed.hallucination_type_options[0].model_fields) == (
@@ -426,6 +435,35 @@ async def test_get_detail_response_matches_external_contract() -> None:
     )
     assert set(parsed.attempts.model_fields) == ATTEMPTS_DETAIL_FIELDS
     assert INTERNAL_GENERATION_FIELDS.isdisjoint(parsed.model_dump().keys())
+
+
+@pytest.mark.asyncio
+async def test_get_reference_document_resolves_uploaded_file(tmp_path) -> None:
+    upload_dir = tmp_path / "uploads" / "stage2" / "42"
+    upload_dir.mkdir(parents=True)
+    pdf_path = upload_dir / "stage2_doc.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    service = _build_service()
+    service.user_repository.get_by_id = AsyncMock(return_value=_student())
+    service.assignment_repository.get_by_id = AsyncMock(return_value=_assignment())
+    service.stage2_detail_repository.get_by_assignment_id = AsyncMock(
+        return_value=_detail()
+    )
+    service.document_repository.get_by_id = AsyncMock(
+        return_value=Document(
+            document_id=502,
+            filename="stage2_doc.pdf",
+            file_path=str(pdf_path),
+        )
+    )
+
+    with patch("app.services.stage2_service._BACKEND_ROOT", tmp_path):
+        path, filename, media_type = await service.get_step2_reference_document(10, 42)
+
+    assert path == pdf_path
+    assert filename == "stage2_doc.pdf"
+    assert media_type == "application/pdf"
 
 
 @pytest.mark.asyncio

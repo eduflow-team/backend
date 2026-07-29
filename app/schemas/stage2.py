@@ -41,6 +41,8 @@ class Stage2AttemptsDetail(BaseModel):
 class Stage2AssignmentDetailResponse(BaseModel):
     assignment_id: int
     title: str
+    reference_document_filename: str = ""
+    reference_document_url: str = ""
     reference_document_text: str
     question: str
     flawed_ai_response: str

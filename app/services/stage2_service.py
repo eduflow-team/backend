@@ -30,6 +30,7 @@ from app.core.exceptions import (
     Stage2HighlightLimitExceededError,
     Stage2HighlightPhaseIncompleteError,
     Stage2LangflowServiceUnavailableError,
+    Stage2ReferenceDocumentNotFoundError,
     UnsupportedStage2FileTypeError,
 )
 from app.models.assignment import Assignment
@@ -89,6 +90,13 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_EXTENSIONS = {".txt", ".md", ".markdown", ".pdf"}
 _UPLOAD_DIR = Path("uploads/stage2")
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_DOCUMENT_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+}
 
 
 class Stage2Service:
@@ -308,6 +316,12 @@ class Stage2Service:
 
         document = await self.document_repository.get_by_id(detail.document_id)
         reference_text = document.raw_text if document and document.raw_text else ""
+        reference_filename = (document.filename if document and document.filename else "") or ""
+        reference_url = (
+            self._step2_document_url(assignment.assignment_id)
+            if document and document.file_path
+            else ""
+        )
 
         max_attempts = assignment.max_attempts or settings.STAGE2_MAX_ATTEMPTS
         status = await self.status_repository.get_or_create(
@@ -340,6 +354,8 @@ class Stage2Service:
         return Stage2AssignmentDetailResponse(
             assignment_id=assignment.assignment_id,
             title=assignment.title or "",
+            reference_document_filename=reference_filename,
+            reference_document_url=reference_url,
             reference_document_text=reference_text,
             question=detail.question or "",
             flawed_ai_response=detail.hallucinated_ai_answer or "",
@@ -358,6 +374,19 @@ class Stage2Service:
             ),
             cleared_highlights=cleared_highlights,
         )
+
+    async def get_step2_reference_document(
+        self, user_id: int, assignment_id: int
+    ) -> tuple[Path, str, str]:
+        """학생용 참고 문서 원본 파일 경로·파일명·media type."""
+        student = await self._get_authorized_student(user_id)
+        _, detail = await self._get_stage2_assignment_for_student(
+            student, assignment_id
+        )
+        document = await self.document_repository.get_by_id(detail.document_id)
+        if document is None:
+            raise Stage2ReferenceDocumentNotFoundError()
+        return self._resolve_reference_document_file(document)
 
     # ------------------------------------------------------------------
     # Student: highlight submit
@@ -794,3 +823,31 @@ class Stage2Service:
         path = directory / safe_name
         path.write_bytes(content)
         return path
+
+    @staticmethod
+    def _step2_document_url(assignment_id: int) -> str:
+        return (
+            f"{settings.API_V1_STR.rstrip('/')}/student/assignments/"
+            f"{assignment_id}/step2/document"
+        )
+
+    @classmethod
+    def _resolve_reference_document_file(
+        cls, document: Document
+    ) -> tuple[Path, str, str]:
+        if not document.file_path:
+            raise Stage2ReferenceDocumentNotFoundError()
+
+        path = Path(document.file_path)
+        if not path.is_absolute():
+            path = _BACKEND_ROOT / path
+        if not path.is_file():
+            raise Stage2ReferenceDocumentNotFoundError()
+
+        filename = Path(document.filename or path.name).name
+        suffix = path.suffix.lower()
+        media_type = _DOCUMENT_MEDIA_TYPES.get(
+            suffix,
+            "application/octet-stream",
+        )
+        return path, filename, media_type

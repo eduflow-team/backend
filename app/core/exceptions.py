@@ -320,6 +320,13 @@ class Stage2CorrectionAlreadySubmittedError(DomainException):
     default_message = "이미 최종 정답을 제출하여 더 이상 수정할 수 없습니다."
 
 
+class Stage2ReferenceDocumentNotFoundError(DomainException):
+    """2단계 참고 문서 파일이 없거나 읽을 수 없을 때 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "참고 문서를 찾을 수 없습니다."
+
+
 class Stage1LangflowServiceUnavailableError(DomainException):
     """Langflow 1단계 RAG chat 생성 장애·타임아웃 시 발생 (503)."""
 
