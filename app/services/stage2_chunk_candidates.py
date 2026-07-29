@@ -273,7 +273,42 @@ def build_stage2_reference_excerpt(
         ]
 
     ordered = sorted(selected, key=lambda candidate: candidate.source_index)
-    return "\n\n".join(candidate.text.strip() for candidate in ordered).strip()
+    excerpt = "\n\n".join(candidate.text.strip() for candidate in ordered).strip()
+    if top_score < 0.18:
+        window = _keyword_window_excerpt(
+            document_text,
+            question,
+            max_chars=max_chars,
+        )
+        if window:
+            return window
+    return excerpt
+
+
+def _keyword_window_excerpt(
+    document_text: str,
+    question: str,
+    *,
+    max_chars: int,
+) -> str:
+    """relevance 점수가 낮을 때 질문·교과 키워드 주변 텍스트 윈도우를 반환한다."""
+    if max_chars <= 0:
+        return ""
+
+    anchors: list[str] = []
+    for token in re.findall(r"[가-힣]{2,}", question):
+        if token not in anchors:
+            anchors.append(token)
+    for fallback in ("교역망", "교역", "은 유통"):
+        if fallback not in anchors:
+            anchors.append(fallback)
+
+    for anchor in anchors:
+        index = document_text.find(anchor)
+        if index < 0:
+            continue
+        return document_text[index : index + max_chars].strip()
+    return ""
 
 
 def _split_stage2_excerpt_units(
