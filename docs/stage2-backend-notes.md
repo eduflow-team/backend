@@ -35,7 +35,7 @@ PDF 업로드 → source_text 추출
   → 최종 실패 시 503 (저장 없음)
 ```
 
-긴 PDF는 `STAGE2_GENERATION_DOCUMENT_MAX_CHARS`(기본 6000)를 넘으면 질문 관련 청크를 읽기 순으로 이어 붙인 excerpt만 Langflow·validator·학생 `reference_document_text`에 사용한다. 원본 PDF 파일은 디스크에 그대로 보관한다.
+긴 PDF는 `STAGE2_GENERATION_DOCUMENT_MAX_CHARS`(기본 6000)를 넘으면 질문 relevance 기준으로 발췌한 excerpt만 Langflow·validator·학생 `reference_document_text`에 사용한다. 원본 PDF 파일은 디스크에 그대로 보관한다.
 
 주요 모듈:
 

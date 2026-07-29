@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.services.stage2_chunk_candidates import (
     Stage2ChunkCandidate,
     build_stage2_chunk_candidates,
+    build_stage2_reference_excerpt,
 )
 
 
@@ -31,7 +32,7 @@ def resolve_stage2_document_context(
 ) -> Stage2DocumentContext:
     """질문 관련 excerpt를 생성 컨텍스트로 사용한다.
 
-    짧은 문서는 그대로 전달하고, 긴 문서는 청크 후보를 읽기 순으로 이어 붙인다.
+    짧은 문서는 그대로 전달하고, 긴 문서는 relevance 기준 발췌문을 만든다.
     Langflow, validator, 학생 reference_document_text는 generation_text를 사용한다.
     """
     normalized_source = source_text.strip()
@@ -65,8 +66,9 @@ def resolve_stage2_document_context(
             chunk_candidates=candidates,
         )
 
-    generation_text = _build_generation_excerpt(
-        candidates,
+    generation_text = build_stage2_reference_excerpt(
+        document_text=normalized_source,
+        question=question,
         max_chars=resolved_max_chars,
     )
     if not generation_text:
@@ -81,32 +83,3 @@ def resolve_stage2_document_context(
         chunk_candidates=candidates,
     )
 
-
-def _build_generation_excerpt(
-    candidates: list[Stage2ChunkCandidate],
-    *,
-    max_chars: int,
-) -> str:
-    if not candidates or max_chars <= 0:
-        return ""
-
-    ordered = sorted(candidates, key=lambda candidate: candidate.source_index)
-    parts: list[str] = []
-    total_chars = 0
-    for candidate in ordered:
-        text = candidate.text.strip()
-        if not text:
-            continue
-
-        separator_len = 2 if parts else 0
-        next_total = total_chars + separator_len + len(text)
-        if next_total > max_chars:
-            remaining = max_chars - total_chars - separator_len
-            if remaining > 0:
-                parts.append(text[:remaining].rstrip())
-            break
-
-        parts.append(text)
-        total_chars = next_total
-
-    return "\n\n".join(parts).strip()

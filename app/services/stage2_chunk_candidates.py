@@ -189,3 +189,115 @@ def _with_bucket(
         relevance_score=candidate.relevance_score,
         selection_bucket=bucket,
     )
+
+
+def build_stage2_reference_excerpt(
+    *,
+    document_text: str,
+    question: str,
+    max_chars: int,
+    chunk_size: int | None = None,
+    min_chunk_chars: int | None = None,
+) -> str:
+    """질문과 관련 높은 청크를 우선 선택해 학생용 발췌문을 만든다.
+
+    선택된 청크는 문서 읽기 순서(source_index)로 이어 붙인다.
+    """
+    if max_chars <= 0:
+        return ""
+
+    resolved_chunk_size = (
+        settings.STAGE2_CHUNK_SIZE if chunk_size is None else chunk_size
+    )
+    resolved_min_chars = (
+        settings.STAGE2_MIN_CHUNK_CHARS if min_chunk_chars is None else min_chunk_chars
+    )
+
+    units = _split_stage2_excerpt_units(
+        document_text,
+        chunk_size=resolved_chunk_size,
+        min_chunk_chars=resolved_min_chars,
+    )
+    if not units:
+        return ""
+
+    normalized_question = _normalize(question)
+    scored = [
+        Stage2ChunkCandidate(
+            chunk_id=f"chunk-{index}",
+            source_index=index,
+            text=unit,
+            relevance_score=_score_chunk_relevance(normalized_question, unit),
+            selection_bucket="EXCERPT",
+        )
+        for index, unit in enumerate(units)
+    ]
+
+    ranked = sorted(
+        scored,
+        key=lambda candidate: (-candidate.relevance_score, candidate.source_index),
+    )
+    top_score = ranked[0].relevance_score if ranked else 0.0
+    min_score = max(top_score - 0.2, top_score * 0.55) if top_score > 0 else 0.0
+    eligible = [
+        candidate
+        for candidate in ranked
+        if candidate.relevance_score >= min_score
+    ]
+
+    selected: list[Stage2ChunkCandidate] = []
+    total_chars = 0
+    for candidate in eligible:
+        text = candidate.text.strip()
+        if not text:
+            continue
+
+        separator_len = 2 if selected else 0
+        next_total = total_chars + separator_len + len(text)
+        if next_total > max_chars:
+            continue
+
+        selected.append(candidate)
+        total_chars = next_total
+
+    if not selected and ranked:
+        top = ranked[0]
+        selected = [
+            Stage2ChunkCandidate(
+                chunk_id=top.chunk_id,
+                source_index=top.source_index,
+                text=top.text.strip()[:max_chars].rstrip(),
+                relevance_score=top.relevance_score,
+                selection_bucket=top.selection_bucket,
+            )
+        ]
+
+    ordered = sorted(selected, key=lambda candidate: candidate.source_index)
+    return "\n\n".join(candidate.text.strip() for candidate in ordered).strip()
+
+
+def _split_stage2_excerpt_units(
+    document_text: str,
+    *,
+    chunk_size: int,
+    min_chunk_chars: int,
+) -> list[str]:
+    """발췌문 선택용 단위를 만든다. 단락은 병합하지 않고 개별 점수화한다."""
+    normalized = re.sub(r"\r\n?", "\n", document_text).strip()
+    if not normalized:
+        return []
+
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", normalized) if p.strip()]
+    units: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph) <= chunk_size:
+            units.append(paragraph)
+            continue
+
+        units.extend(
+            _merge_short_chunks(
+                _split_stage2_document(paragraph, chunk_size),
+                min_chunk_chars=min_chunk_chars,
+            )
+        )
+    return units
