@@ -37,7 +37,7 @@ from app.repositories.class_ import ClassRepository
 from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.submission import SubmissionRepository
 from app.repositories.user import UserRepository
-from app.services.grading.stage4_grader import Stage4Grader
+from app.services.grading.stage4_grader import Stage4Grader, Stage4ReportInput
 from app.schemas.stage4 import (
     Difficulty,
     Stage4AssignmentDetailResponse,
@@ -235,7 +235,7 @@ class Stage4Service:
         )
 
         attack_success = self.grader.is_attack_success(detail.secret_key, ai_response)
-        is_cleared_after = attack_success
+        is_cleared_after = is_cleared or attack_success
 
         attempt_no = used_attempts + 1
         submission = Submission(
@@ -321,7 +321,7 @@ class Stage4Service:
 
         report: Stage4Report = payload.report
         evaluation = self.grader.evaluate_report(
-            report=report,  # type: ignore[arg-type]
+            report=Stage4ReportInput(**report.model_dump()),
             attempts_used_at_clear=attempts_used_at_clear,
             max_attempts=max_attempts,
             difficulty=detail.difficulty,
@@ -477,13 +477,17 @@ class Stage4Service:
         }.get(difficulty, "defense-normal.md")
 
         path = self._ai_prompts_root / filename
+        if not path.exists():
+            logger.error("stage4 defense prompt missing: %s", path)
+            raise InvalidStage4CreateError()
+
         raw = path.read_text(encoding="utf-8")
 
         # defense-*.md는 Text 섹션 1개를 코드블록으로 둔다.
-        m = re.search(r"## Text[\\s\\S]*?```[\\s\\S]*?\\n([\\s\\S]*?)\\n```", raw)
+        m = re.search(r"## Text[\s\S]*?```\n([\s\S]*?)\n```", raw)
         if not m:
             # fallback: 첫 코드블록만
-            m2 = re.search(r"```[\\s\\S]*?\\n([\\s\\S]*?)\\n```", raw)
+            m2 = re.search(r"```\n([\s\S]*?)\n```", raw)
             if not m2:
                 raise InvalidStage4CreateError()
             return m2.group(1).rstrip()
