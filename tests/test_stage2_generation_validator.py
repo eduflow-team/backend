@@ -257,6 +257,23 @@ def test_retrieval_error_requires_retrieved_context() -> None:
         ("존재하지 않는 근거", False),
     ],
 )
+def test_evidence_match_ignores_pdf_line_breaks_inside_words() -> None:
+    document_text = (
+        "⑤ 송, 원 등은 취안저우 등 무역항에 시박사\n"
+        "를 설치하여 무역을 관리하였다."
+    )
+    evidence_sentence = (
+        "송, 원 등은 취안저우 등 무역항에 시박사를 설치하여 무역을 관리하였다."
+    )
+    validation = validate_stage2_generation_result(
+        result=_result(_error(evidence_sentence=evidence_sentence)),
+        document_text=document_text,
+        hallucination_types=HALLUCINATION_TYPES,
+        expected_error_count=1,
+    )
+    assert Stage2GenerationValidationCode.EVIDENCE_NOT_FOUND not in validation.codes
+
+
 def test_evidence_match_against_document(evidence_sentence: str, should_pass: bool) -> None:
     validation = validate_stage2_generation_result(
         result=_result(_error(evidence_sentence=evidence_sentence)),

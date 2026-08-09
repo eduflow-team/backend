@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # Stage 2
     STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
     STAGE2_MAX_ATTEMPTS: int = 5
-    STAGE2_GENERATION_MAX_ATTEMPTS: int = 2
+    STAGE2_GENERATION_MAX_ATTEMPTS: int = 3
     STAGE2_FLOW_VERSION: str = "stage2-v2"
     STAGE2_LOCATION_THRESHOLD: float = 0.8
     STAGE2_REASONING_THRESHOLD: float = 0.95

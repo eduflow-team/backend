@@ -171,6 +171,7 @@ class Stage2GenerationOrchestrator:
             duration_ms = (time.perf_counter() - started_at) * 1000
             aligned_result = align_stage2_generation_result(
                 langflow_result,
+                document_text=document_text,
                 hallucination_types=hallucination_types,
                 expected_error_count=expected_error_count,
             )

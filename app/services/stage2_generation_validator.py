@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -165,4 +166,13 @@ def _text_exists_in_source(
         return True
     if needle.strip() and needle.strip() in raw_source:
         return True
+    compact_needle = _compact_text(needle)
+    compact_source = _compact_text(raw_source)
+    if compact_needle and compact_needle in compact_source:
+        return True
     return _overlap_score(normalized_needle, normalized_source) >= match_threshold
+
+
+def _compact_text(text: str) -> str:
+    """PDF 추출본처럼 단어 중간에 줄바꿈이 끼어 있어도 부분 일치를 허용한다."""
+    return re.sub(r"\s+", "", (text or "").strip().lower())
