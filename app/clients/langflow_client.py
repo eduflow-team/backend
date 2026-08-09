@@ -54,7 +54,7 @@ def build_stage2_langflow_tweaks(
     if retrieval_input is None:
         retrieval_input = _EMPTY_STAGE2_RETRIEVAL_INPUT
 
-    types_str = ", ".join(hallucination_types)
+    types_str = ",".join(hallucination_types)
     count_str = str(expected_error_count)
     shared = {
         "document_text": document_text,
@@ -267,43 +267,72 @@ class LangflowClient:
         return self._parse_stage2_outputs(data)
 
     def _parse_stage2_outputs(self, data: dict) -> Stage2LangflowResult:
+        texts = self._collect_stage2_output_texts(data)
+        flawed_text, raw_errors = self._split_stage2_output_texts(texts)
+
+        if not flawed_text:
+            raise Stage2LangflowServiceUnavailableError()
+
+        try:
+            return parse_stage2_langflow_generation_result(
+                flawed_ai_response=flawed_text,
+                raw_errors=raw_errors,
+            )
+        except ValidationError as exc:
+            logger.exception("stage2 langflow output validation failed")
+            raise Stage2LangflowServiceUnavailableError() from exc
+
+    @staticmethod
+    def _collect_stage2_output_texts(data: dict) -> list[str]:
         texts: list[str] = []
         for run_output in data.get("outputs", []):
             for inner in run_output.get("outputs", []):
                 results = inner.get("results", {})
                 message = results.get("message") or results.get("text")
                 if isinstance(message, dict) and message.get("text"):
-                    texts.append(message["text"])
+                    texts.append(str(message["text"]))
                 elif isinstance(message, str):
                     texts.append(message)
+        return texts
 
-        if not texts:
-            raise Stage2LangflowServiceUnavailableError()
-
-        flawed = _strip_markdown(texts[0])
+    @staticmethod
+    def _split_stage2_output_texts(texts: list[str]) -> tuple[str, list]:
         raw_errors: list = []
-        if len(texts) > 1:
-            raw = texts[1].strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                logger.exception("stage2 langflow generated_errors JSON parse failed")
-                raise Stage2LangflowServiceUnavailableError() from exc
-            if isinstance(parsed, dict):
-                raw_errors = parsed.get("generated_errors", [])
-            elif isinstance(parsed, list):
-                raw_errors = parsed
+        flawed_candidates: list[str] = []
 
+        for text in texts:
+            stripped = text.strip()
+            if not stripped:
+                continue
+            parsed_errors = LangflowClient._try_parse_generated_errors(stripped)
+            if parsed_errors is not None:
+                if len(parsed_errors) >= len(raw_errors):
+                    raw_errors = parsed_errors
+                continue
+            flawed_candidates.append(_strip_markdown(stripped))
+
+        flawed_text = ""
+        if flawed_candidates:
+            flawed_text = max(flawed_candidates, key=len)
+        return flawed_text, raw_errors
+
+    @staticmethod
+    def _try_parse_generated_errors(text: str) -> list | None:
+        raw = text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        if not raw.startswith("{") and not raw.startswith("["):
+            return None
         try:
-            return parse_stage2_langflow_generation_result(
-                flawed_ai_response=flawed,
-                raw_errors=raw_errors,
-            )
-        except ValidationError as exc:
-            logger.exception("stage2 langflow output validation failed")
-            raise Stage2LangflowServiceUnavailableError() from exc
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            errors = parsed.get("generated_errors")
+            return errors if isinstance(errors, list) else None
+        if isinstance(parsed, list):
+            return parsed
+        return None
 
     def _mock_stage2_hallucination(
         self,

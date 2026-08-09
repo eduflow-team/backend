@@ -23,7 +23,7 @@ from app.services.stage2_index_calculator import (
     Stage2IndexCalculationCode,
     apply_server_error_indices,
 )
-from app.services.stage2_retrieval_input import build_stage2_retrieval_input
+from app.services.stage2_generation_align import align_stage2_generation_result
 from app.services.stage2_document_context import Stage2DocumentContext
 from app.services.stage2_generation_logging import (
     log_stage2_generation_attempt,
@@ -169,17 +169,22 @@ class Stage2GenerationOrchestrator:
                 )
                 raise
             duration_ms = (time.perf_counter() - started_at) * 1000
+            aligned_result = align_stage2_generation_result(
+                langflow_result,
+                hallucination_types=hallucination_types,
+                expected_error_count=expected_error_count,
+            )
             validation = validate_stage2_generation_result(
-                result=langflow_result,
+                result=aligned_result,
                 document_text=document_text,
                 hallucination_types=hallucination_types,
                 expected_error_count=expected_error_count,
             )
-            index_application = apply_server_error_indices(langflow_result)
+            index_application = apply_server_error_indices(aligned_result)
             final_result = (
                 index_application.result
                 if index_application.applied
-                else langflow_result
+                else aligned_result
             )
             pipeline = Stage2GenerationPipelineResult(
                 result=final_result,

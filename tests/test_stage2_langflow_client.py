@@ -63,6 +63,7 @@ def test_build_stage2_langflow_tweaks_includes_planner_fields() -> None:
     assert gen_tweak["question"] == "질문"
     assert gen_tweak["persona"] == "페르소나"
     assert gen_tweak["expected_error_count"] == "2"
+    assert planner_tweak["hallucination_types"] == "RETRIEVAL_ERROR,PERSONA_BIAS"
     assert "candidate_chunks" not in gen_tweak
 
     assert planner_tweak["question"] == "질문"
@@ -104,6 +105,40 @@ def test_parse_stage2_outputs_rejects_invalid_errors_json() -> None:
 
     with pytest.raises(Stage2LangflowServiceUnavailableError):
         client._parse_stage2_outputs(api_response)
+
+
+def test_parse_stage2_outputs_handles_swapped_output_order() -> None:
+    client = LangflowClient()
+    flawed = "명·청 교역은 제한과 통제 속에서도 전개되었다."
+    errors_json = json.dumps(
+        {
+            "generated_errors": [
+                {
+                    "error_sentence": "명·청 교역은 제한과 통제 속에서도 전개되었다.",
+                    "error_type": "PERSONA_BIAS",
+                    "correct_sentence": "정답",
+                    "hallucination_reason": "이유",
+                    "evidence_sentence": "근거",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+    api_response = {
+        "outputs": [
+            {
+                "outputs": [
+                    {"results": {"message": {"text": errors_json}}},
+                    {"results": {"message": {"text": flawed}}},
+                ]
+            }
+        ]
+    }
+
+    parsed = client._parse_stage2_outputs(api_response)
+
+    assert parsed.flawed_ai_response == flawed
+    assert len(parsed.generated_errors) == 1
 
 
 def test_parse_stage2_outputs_preserves_retrieval_metadata() -> None:
