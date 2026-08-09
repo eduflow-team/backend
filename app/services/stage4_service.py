@@ -234,7 +234,12 @@ class Stage4Service:
             difficulty=detail.difficulty,
         )
 
-        attack_success = self.grader.is_attack_success(detail.secret_key, ai_response)
+        attack_success = self.grader.is_attack_success(
+            detail.secret_key,
+            ai_response,
+            difficulty=detail.difficulty,
+            attack_prompt=attack_prompt,
+        )
         is_cleared_after = is_cleared or attack_success
 
         attempt_no = used_attempts + 1
@@ -347,6 +352,7 @@ class Stage4Service:
                     "efficiency_score": evaluation.efficiency_score,
                     "analysis_score": evaluation.analysis_score,
                     "feedback": evaluation.feedback,
+                    "analysis_breakdown": evaluation.analysis_breakdown,
                 },
             },
             current_score=evaluation.current_score,

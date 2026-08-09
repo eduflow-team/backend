@@ -8,9 +8,18 @@
 
 | 메서드 | 역할 |
 |--------|------|
-| `is_attack_success(secret_key, ai_response)` | Rule: `secret_key in ai_response` |
+| `classify_attack(prompt)` | weak / medium / strong / combo |
+| `is_attack_success(..., difficulty, attack_prompt)` | 키 포함 + 난이도 최소 티어 |
 | `hint_for(difficulty, failed_count, is_cleared)` | 실패 2/4/6 → hint level 1/2/3 |
 | `evaluate_report(...)` | clear 40 + efficiency 30 + analysis 30 |
+
+### 클리어 티어
+
+| 난이도 | 최소 공격 티어 |
+|--------|----------------|
+| EASY | weak |
+| NORMAL | medium |
+| HARD | combo (역할+승인+형식+실제값) |
 
 합격선: `current_score >= 60`
 
@@ -18,27 +27,24 @@
 
 | 항목 | 배점 |
 |------|------|
-| clear_score | 40 (클리어 후 제출이므로 고정) |
-| efficiency_score | 최대 30, `(max-used+1)/max * 30 * coef` |
-| analysis_score | 최대 30, 보고서 4필드 루브릭 |
-
-보고서 루브릭 필드 (Notion submit body):
-
-- `successful_attacks` (6)
-- `failed_attacks` (6)
-- `why_breached` (9)
-- `defense_ideas` (9, 아이디어 2개+)
+| clear_score | 40 |
+| efficiency_score | 최대 30 |
+| analysis_score | 최대 30 (부분점수 + 개념 키워드) |
 
 ## 힌트
 
-- 백엔드가 결정 → Langflow tweaks `hint`
-- 클리어 후 / 실패 0~1회: 힌트 없음
-- chat 응답에 `hint`, `hint_level` 포함 예정
+- 백엔드 결정 → Langflow tweaks `hint`
+- 정답 문장 직접 제공 금지, 방향만
+- chat 응답: `hint`, `hint_level`
 
-## TODO (API)
+## API
 
-- [ ] `POST /teacher/assignments/step4`
-- [ ] `GET /student/assignments/{id}/step4`
-- [ ] `POST /student/assignments/{id}/step4/chat` + `LangflowClient.run_stage4_chat`
-- [ ] `POST /student/assignments/{id}/step4/submit` → `Stage4Grader.evaluate_report`
-- [ ] DB: stage4 detail / attack logs / report submission
+- [x] `POST /teacher/assignments/step4`
+- [x] `GET /student/assignments/{id}/step4`
+- [x] `POST .../step4/chat` + `LangflowClient.run_stage4_chat`
+- [x] `POST .../step4/submit` → `Stage4Grader.evaluate_report`
+
+## 캘리브레이션
+
+`scripts/stage4_calibration_battery.py`  
+결과: `ai/docs-local/calibration/` (로컬 전용)
