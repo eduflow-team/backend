@@ -56,6 +56,13 @@ class CorrectionEvaluation:
         )
 
 
+@dataclass(frozen=True)
+class GEvalLlmConfig:
+    chat_completions_url: str
+    api_key: str
+    model: str
+
+
 class GEvalService:
     async def evaluate_reasoning(
         self,
@@ -87,9 +94,11 @@ class GEvalService:
                 ),
             )
 
-        if settings.OPENAI_API_KEY:
+        llm_config = resolve_geval_llm_config()
+        if llm_config is not None:
             try:
                 return await self._evaluate_reasoning_llm(
+                    llm_config=llm_config,
                     student_reason=student_reason,
                     student_error_type=student_error_type,
                     hallucination_reason=hallucination_reason,
@@ -109,6 +118,7 @@ class GEvalService:
     async def _evaluate_reasoning_llm(
         self,
         *,
+        llm_config: GEvalLlmConfig,
         student_reason: str,
         student_error_type: str,
         hallucination_reason: str,
@@ -125,36 +135,11 @@ class GEvalService:
             f"reference_document:\n{doc_preview}\n\n"
             'JSON만 출력: {"rating": 1-5 정수, "feedback": "한국어 2~3문장"}'
         )
-
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.OPENAI_CHAT_MODEL,
-                    "temperature": 0.2,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "교육용 채점 judge. 요청한 JSON만 출력.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-
-        content = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
+        parsed = await _request_geval_json(
+            llm_config=llm_config,
+            system_prompt="교육용 채점 judge. 요청한 JSON만 출력.",
+            user_prompt=prompt,
         )
-        parsed = _parse_json_content(content)
         rating = max(1, min(5, int(parsed.get("rating", 1))))
         feedback = str(parsed.get("feedback", "")).strip() or _default_feedback(rating)
         return ReasoningEvaluation(
@@ -170,7 +155,7 @@ class GEvalService:
         evidence_sentence: str,
         reference_document: str,
     ) -> ReasoningEvaluation:
-        """OPENAI_API_KEY 없을 때 키워드 겹침 기반 추정 (smoke test·로컬용)."""
+        """LLM judge 미설정 시 키워드 겹침 기반 추정 (smoke test·로컬용)."""
 
         reason_tokens = _tokenize(student_reason)
         if len(reason_tokens) < 3:
@@ -234,9 +219,11 @@ class GEvalService:
         hallucination_reason: str,
         evidence_sentence: str,
     ) -> CorrectionEvaluation:
-        if settings.OPENAI_API_KEY:
+        llm_config = resolve_geval_llm_config()
+        if llm_config is not None:
             try:
                 return await self._evaluate_correction_llm(
+                    llm_config=llm_config,
                     student_answer=student_answer,
                     correct_sentence=correct_sentence,
                     original_highlight=original_highlight,
@@ -257,6 +244,7 @@ class GEvalService:
     async def _evaluate_correction_llm(
         self,
         *,
+        llm_config: GEvalLlmConfig,
         student_answer: str,
         correct_sentence: str,
         original_highlight: str,
@@ -276,36 +264,11 @@ class GEvalService:
             'JSON만 출력: {"factual_accuracy": 1-5, "completeness": 1-5, '
             '"feedback": "한국어 1~2문장"}'
         )
-
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.OPENAI_CHAT_MODEL,
-                    "temperature": 0.2,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "교육용 채점 judge. 요청한 JSON만 출력.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-
-        content = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
+        parsed = await _request_geval_json(
+            llm_config=llm_config,
+            system_prompt="교육용 채점 judge. 요청한 JSON만 출력.",
+            user_prompt=prompt,
         )
-        parsed = _parse_json_content(content)
         factual = max(1, min(5, int(parsed.get("factual_accuracy", 1))))
         completeness = max(1, min(5, int(parsed.get("completeness", 1))))
         feedback = str(parsed.get("feedback", "")).strip() or _correction_feedback(
@@ -371,6 +334,71 @@ class GEvalService:
             completeness=completeness,
             ai_feedback=feedback,
         )
+
+
+def resolve_geval_llm_config() -> GEvalLlmConfig | None:
+    """G-Eval judge용 OpenAI-compatible 엔드포인트를 반환한다."""
+    base_url = settings.GEVAL_LLM_BASE_URL.strip()
+    model = settings.GEVAL_LLM_MODEL.strip()
+    if base_url and model:
+        return GEvalLlmConfig(
+            chat_completions_url=_chat_completions_url(base_url),
+            api_key=settings.GEVAL_LLM_API_KEY.strip() or "ollama",
+            model=model,
+        )
+
+    if settings.OPENAI_API_KEY.strip():
+        return GEvalLlmConfig(
+            chat_completions_url="https://api.openai.com/v1/chat/completions",
+            api_key=settings.OPENAI_API_KEY.strip(),
+            model=settings.OPENAI_CHAT_MODEL,
+        )
+    return None
+
+
+def _chat_completions_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/chat/completions"
+    return f"{normalized}/v1/chat/completions"
+
+
+async def _request_geval_json(
+    *,
+    llm_config: GEvalLlmConfig,
+    system_prompt: str,
+    user_prompt: str,
+    timeout: float = 120.0,
+) -> dict:
+    headers = {"Content-Type": "application/json"}
+    if llm_config.api_key:
+        headers["Authorization"] = f"Bearer {llm_config.api_key}"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            llm_config.chat_completions_url,
+            headers=headers,
+            json={
+                "model": llm_config.model,
+                "temperature": 0.2,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+        .strip()
+    )
+    return _parse_json_content(content)
 
 
 def _correction_feedback(factual: int, completeness: int) -> str:

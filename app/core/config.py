@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_DIMENSIONS: int = 768
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
 
+    # G-Eval judge (OpenAI-compatible: Ollama / vLLM 등)
+    # 설정 시 OPENAI_API_KEY보다 G-Eval에 우선 사용
+    GEVAL_LLM_BASE_URL: str = ""
+    GEVAL_LLM_MODEL: str = ""
+    GEVAL_LLM_API_KEY: str = "ollama"
+
     # Langflow
     LANGFLOW_URL: str = "http://localhost:7860"
     LANGFLOW_API_KEY: str = ""

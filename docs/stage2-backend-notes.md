@@ -176,6 +176,7 @@ Flow 상세·노드 ID: `ai/docs/stage2-langflow-contract.md`, `ai/flows/stage2-
 - **G-Eval**: `student_reason` → `reasoning_score` (θ_R ≥ 0.95)
 - **판정**: 3조건 AND → `is_correct`
 - `OPENAI_API_KEY` 없으면 G-Eval fallback(키워드 겹침) — smoke test용
+- **로컬 G-Eval**: `GEVAL_LLM_BASE_URL` + `GEVAL_LLM_MODEL` (Ollama OpenAI-compatible) 설정 시 OpenAI보다 우선
 
 ## Correction 채점 (`GEvalService`)
 
@@ -194,6 +195,9 @@ Flow 상세·노드 ID: `ai/docs/stage2-langflow-contract.md`, `ai/flows/stage2-
 | `STAGE2_LOCATION_THRESHOLD` | 0.8 | 위치·근거 유사도 |
 | `STAGE2_REASONING_THRESHOLD` | 0.95 | 하이라이트 reasoning |
 | `STAGE2_CORRECTION_MIN_SCORE` | 4 | 수정문 G-Eval 통과 점수 |
+| `GEVAL_LLM_BASE_URL` | (empty) | G-Eval judge OpenAI-compatible base (예: `http://host.docker.internal:11434/v1`) |
+| `GEVAL_LLM_MODEL` | (empty) | G-Eval judge 모델 (예: `exaone3.5:7.8b`) |
+| `GEVAL_LLM_API_KEY` | ollama | 로컬 judge API key (Ollama는 임의 값 가능) |
 | `STAGE2_MAX_ATTEMPTS` | 5 | 학생 하이라이트 시도 횟수 |
 | `STAGE2_CHUNK_SIZE` | 400 | PDF 청크 크기 |
 | `STAGE2_MAX_CHUNK_CANDIDATES` | 5 | Langflow 전달 후보 수 |
