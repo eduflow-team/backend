@@ -325,7 +325,7 @@ class AssignmentService:
         self, user_id: int, assignment_id: int, payload: Stage1SubmitRequest
     ) -> Stage1SubmitResponse:
         student = await self._get_authorized_student(user_id)
-        assignment, _detail = await self._get_stage1_assignment_for_student(
+        assignment, detail = await self._get_stage1_assignment_for_student(
             student, assignment_id
         )
         params = payload.final_parameters
@@ -351,10 +351,27 @@ class AssignmentService:
             raise Stage1SubmitLimitExceededError()
 
         documents = await self.document_repository.get_by_assignment_id(assignment_id)
-        source_text = documents[0].raw_text if documents else ""
+        if not documents or not documents[0].raw_text:
+            raise AssignmentNotFoundError("과제 문서가 아직 준비되지 않았습니다.")
+        document = documents[0]
+
+        # 전체 원문이 아니라 제출 파라미터로 다시 검색한 청크만 채점 기준에 쓴다.
+        # (긴 교재 전체와 겹치면 나쁜 파라미터 답도 100점이 나오던 문제 방지)
+        default_params = self._parse_parameters(detail.default_parameters)
+        chunk_vectors = await self._load_or_build_chunk_vectors(
+            document,
+            requested_chunk_size=params.chunk_size,
+            default_chunk_size=default_params.chunk_size,
+        )
+        retrieved_context, _visualization = await self._search_context(
+            chunk_vectors,
+            message=payload.student_prompt,
+            top_k=params.top_k,
+        )
+        source_text = (retrieved_context or "").strip() or (document.raw_text or "")[:2000]
         report, current_score = await self._evaluate_response(
             selected_ai_response=payload.selected_ai_response,
-            source_text=source_text or "",
+            source_text=source_text,
             question=assignment.description or "",
         )
 
@@ -672,6 +689,13 @@ class AssignmentService:
     def _score_against_source(
         self, *, selected_ai_response: str, source_text: str
     ) -> tuple[int, int, int, str]:
+        """원문(제출 시 검색 청크) 토큰 겹침 채점.
+
+        - support = (답변∩기준텍스트) / 답변 토큰 수
+        - 기준텍스트는 전체 교재가 아니라 제출 파라미터로 검색한 청크
+        - 답변 토큰의 약 55%가 기준에 있으면 100점 근접
+        """
+
         response_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", selected_ai_response))
         source_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", source_text))
         if not response_tokens:
@@ -683,31 +707,32 @@ class AssignmentService:
             )
 
         overlap = response_tokens & source_tokens
-        overlap_ratio = len(overlap) / max(len(response_tokens), 1)
-        coverage = len(overlap) / max(len(source_tokens), 1) if source_tokens else 0.0
+        support = len(overlap) / max(len(response_tokens), 1)
 
-        faithfulness = max(1, min(5, round(overlap_ratio * 5)))
-        relevance = max(
-            1,
-            min(5, round((0.6 * overlap_ratio + 0.4 * min(1.0, coverage * 20)) * 5)),
-        )
-        current_score = int(round(((faithfulness + relevance) / 10) * 100))
+        # 55% support ≈ 100점 (의역 여유). 검색 청크가 짧으면 환각 답은 자연히 낮아짐.
+        full_marks_at = 0.55
+        normalized = min(1.0, support / full_marks_at) if full_marks_at else 0.0
+        current_score = int(round(100 * normalized))
+        current_score = max(0, min(100, current_score))
+
+        # API 리포트용 1~5 (동일 스케일에서 환산)
+        faithfulness = max(1, min(5, int(round(normalized * 5)) or 1))
+        relevance = faithfulness
 
         if faithfulness <= 2:
             feedback = (
-                "질문에서 요구한 핵심 내용은 일부 포함되었으나, 원본 교재에 없는 내용이 섞여 있을 수 "
-                "있습니다. AI가 주어진 문서에만 집중하게 만들려면 temperature를 낮추거나 top_k를 "
-                "조절해 보세요."
+                "답변에 학습 자료에서 확인하기 어려운 내용이 섞여 있는 것 같습니다. "
+                "자료에 더 잘 맞는 답을 얻으려면 검색·생성 설정을 다시 살펴보세요."
             )
         elif faithfulness >= 4:
             feedback = (
-                "검색된 자료와의 일치도가 높고 관련 정보도 잘 담겼습니다. "
-                "지금의 파라미터 조합을 기억해 두면 도움이 됩니다."
+                "답변이 주어진 자료와 잘 맞아 보입니다. "
+                "어떤 설정에서 이런 결과가 나왔는지 스스로 정리해 두면 좋습니다."
             )
         else:
             feedback = (
-                "핵심 내용은 대체로 맞지만 일부 표현이 자료와 어긋날 수 있습니다. "
-                "chunk_size·top_k·temperature를 바꿔 보며 원문에 더 가까운 답을 찾아보세요."
+                "핵심은 대체로 닿아 있지만, 자료와 어긋나거나 애매한 표현이 일부 있습니다. "
+                "설정을 바꿔 가며 자료에 더 가까운 답을 비교해 보세요."
             )
         return faithfulness, relevance, current_score, feedback
 
@@ -804,13 +829,17 @@ class AssignmentService:
         answer_preview = (selected_ai_response or "")[:1200]
         prompt = (
             "당신은 AI 리터러시 교육용 채점 조교입니다. "
-            "학생이 파라미터(chunk_size, top_k, temperature)를 조절해 문서 기반 답을 찾는 과제입니다.\n"
-            "아래 점수(1~5)와 원문·답변을 보고, 학생이 다음에 무엇을 바꿀지 한국어로 2~3문장 피드백하세요. "
-            "숫자 점수만 반복하지 말고, temperature/top_k/chunk_size 중 조절 힌트를 포함하세요.\n\n"
+            "학생이 설정을 바꿔 가며 문서 기반 답을 찾는 과제입니다.\n"
+            "아래 점수(1~5)와 참고 자료·답변을 보고, 한국어로 2~3문장 피드백하세요.\n"
+            "규칙:\n"
+            "- 답변이 자료와 얼마나 맞는지, 어떤 점이 아쉬운지만 간접적으로 말해 주세요.\n"
+            "- chunk_size, top_k, temperature 등 파라미터 이름을 쓰지 마세요.\n"
+            "- '높여라/낮춰라/늘려라/줄여라'처럼 구체적 조절 지시를 하지 마세요.\n"
+            "- 숫자 점수만 반복하지 마세요.\n\n"
             f"질문: {question or '(없음)'}\n"
             f"faithfulness(원문 충실): {faithfulness}/5\n"
             f"relevance(관련성): {relevance}/5\n"
-            f"원문 일부:\n{source_preview}\n\n"
+            f"참고 자료 일부:\n{source_preview}\n\n"
             f"학생 선택 답변:\n{answer_preview}\n"
         )
 
@@ -830,7 +859,10 @@ class AssignmentService:
                         "messages": [
                             {
                                 "role": "system",
-                                "content": "한국어로 짧고 친절한 학습 피드백만 출력하세요.",
+                                "content": (
+                                    "한국어로 짧고 친절한 학습 피드백만 출력하세요. "
+                                    "파라미터 이름이나 높임/낮춤 지시는 하지 마세요."
+                                ),
                             },
                             {"role": "user", "content": prompt},
                         ],
