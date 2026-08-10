@@ -369,11 +369,16 @@ class AssignmentService:
             top_k=params.top_k,
         )
         source_text = (retrieved_context or "").strip() or (document.raw_text or "")[:2000]
-        report, current_score = await self._evaluate_response(
+        report, quality_score = await self._evaluate_response(
             selected_ai_response=payload.selected_ai_response,
             source_text=source_text,
             question=assignment.description or "",
         )
+        movement = self._parameter_movement(
+            baseline=default_params,
+            submitted=params,
+        )
+        current_score = self._apply_movement_to_score(quality_score, movement)
 
         # records 대표 제출: 이전 final 해제 후 이번 제출만 is_final=True
         await self.submission_repository.clear_final_for_user_and_assignment(
@@ -412,6 +417,9 @@ class AssignmentService:
             evaluation_metadata={
                 "faithfulness_score": report.faithfulness_score,
                 "relevance_score": report.relevance_score,
+                "quality_score": quality_score,
+                "parameter_movement": round(movement, 4),
+                "movement_lambda": settings.STAGE1_MOVEMENT_LAMBDA,
             },
         )
         await self.evaluation_repository.create(evaluation)
@@ -735,6 +743,39 @@ class AssignmentService:
                 "설정을 바꿔 가며 자료에 더 가까운 답을 비교해 보세요."
             )
         return faithfulness, relevance, current_score, feedback
+
+    def _parameter_movement(
+        self,
+        *,
+        baseline: Stage1Parameters,
+        submitted: Stage1Parameters,
+    ) -> float:
+        """과제 기본 파라미터 대비 제출 파라미터의 변경량 (0~1).
+
+        chunk_size·top_k 비중을 크게, temperature는 작게 반영한다.
+        """
+
+        presets = list(settings.STAGE1_CHUNK_SIZE_PRESETS)
+
+        def _chunk_index(size: int) -> int:
+            if size in presets:
+                return presets.index(size)
+            return min(range(len(presets)), key=lambda i: abs(presets[i] - size))
+
+        chunk_span = max(len(presets) - 1, 1)
+        chunk_m = abs(_chunk_index(submitted.chunk_size) - _chunk_index(baseline.chunk_size)) / chunk_span
+        # UI에서 주로 쓰는 1~10 구간을 기준으로 정규화 (그 이상은 1로 캡)
+        topk_m = min(1.0, abs(submitted.top_k - baseline.top_k) / 9.0)
+        temp_m = min(1.0, abs(float(submitted.temperature) - float(baseline.temperature)))
+        movement = 0.45 * chunk_m + 0.40 * topk_m + 0.15 * temp_m
+        return max(0.0, min(1.0, movement))
+
+    def _apply_movement_to_score(self, quality_score: int, movement: float) -> int:
+        """최종 = 품질 × (1 − λ × 움직임). 같은 품질이면 덜 바꾼 쪽이 더 높다."""
+
+        lam = float(settings.STAGE1_MOVEMENT_LAMBDA)
+        final = quality_score * (1.0 - lam * movement)
+        return max(0, min(100, int(round(final))))
 
     async def _generate_student_question(
         self,
