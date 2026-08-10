@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from decimal import Decimal
@@ -35,7 +36,7 @@ from app.core.exceptions import (
 )
 from app.models.assignment import Assignment
 from app.models.document import Document
-from app.models.enums import ProgressStatus
+from app.models.enums import AssignmentPublishStatus, ProgressStatus
 from app.models.evaluation import Evaluation
 from app.models.stage import Stage2AssignmentDetail, Stage2ErrorAnswer
 from app.models.submission import (
@@ -75,9 +76,15 @@ from app.schemas.stage2 import (
 from app.services.grading.geval_service import GEvalService
 from app.services.grading.highlight_grader import HighlightGrader
 from app.services.embedding_service import extract_text_from_upload
-from app.services.stage2_generation_orchestrator import Stage2GenerationOrchestrator
+from app.services.stage2_generation_orchestrator import (
+    Stage2GenerationOrchestrator,
+    Stage2GenerationPipelineResult,
+)
 from app.services.stage2_generation_metadata import build_stage2_generation_metadata
-from app.services.stage2_document_context import resolve_stage2_document_context
+from app.services.stage2_document_context import (
+    Stage2DocumentContext,
+    resolve_stage2_document_context,
+)
 from app.services.stage2_retrieval_input import build_stage2_retrieval_input_from_candidates
 from app.services.stage2_generation_logging import (
     log_stage2_generation_failed,
@@ -97,6 +104,16 @@ _DOCUMENT_MEDIA_TYPES = {
     ".md": "text/markdown; charset=utf-8",
     ".markdown": "text/markdown; charset=utf-8",
 }
+
+CARD_EXPECTED_ERROR_COUNT = 1
+
+
+@dataclass(frozen=True)
+class _PreparedStage2Upload:
+    filename: str
+    content: bytes
+    suffix: str
+    raw_text: str
 
 
 class Stage2Service:
@@ -139,63 +156,40 @@ class Stage2Service:
         subject = (subject or "").strip()
         question = (question or "").strip()
         persona = (persona or "").strip()
-        filename = (file.filename or "").strip()
-        if not title or not subject or not question or not persona or not filename:
+        if not title or not subject or not question or not persona:
             raise InvalidStage2CreateError()
 
         if len(persona) > 100:
             raise InvalidStage2CreateError()
 
-        hallucination_types = self._parse_hallucination_types(hallucination_types_raw)
-        if not (1 <= expected_error_count <= 5):
+        hint_types = self._parse_hallucination_types(hallucination_types_raw)
+        if expected_error_count != CARD_EXPECTED_ERROR_COUNT:
             raise InvalidStage2CreateError()
 
-        suffix = Path(filename).suffix.lower()
-        if suffix not in _ALLOWED_EXTENSIONS:
-            raise UnsupportedStage2FileTypeError()
-
-        content = await file.read()
-        if not content:
-            raise InvalidStage2CreateError()
-        if len(content) > settings.STAGE2_MAX_UPLOAD_BYTES:
-            raise Stage2FileTooLargeError()
-
-        try:
-            raw_text = extract_text_from_upload(filename, content)
-            if not raw_text.strip():
-                raise Stage2DocumentProcessingError()
-        except UnsupportedStage2FileTypeError:
-            raise
-        except Stage2DocumentProcessingError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("stage2 document processing failed")
-            raise Stage2DocumentProcessingError() from exc
+        upload = await self._prepare_upload(file)
 
         log_stage2_generation_started(
             teacher_user_id=teacher.user_id,
-            expected_error_count=expected_error_count,
-            hallucination_types=hallucination_types,
-            filename=filename,
+            expected_error_count=CARD_EXPECTED_ERROR_COUNT,
+            hallucination_types=self._generation_types_for_card(hint_types, 0),
+            filename=upload.filename,
         )
 
         document_context = resolve_stage2_document_context(
-            source_text=raw_text,
+            source_text=upload.raw_text,
             question=question,
         )
         retrieval_input = build_stage2_retrieval_input_from_candidates(
             document_context.chunk_candidates,
         )
 
-        pipeline = await self.generation_orchestrator.generate(
-            document_text=document_context.generation_text,
+        pipeline = await self._run_stage2_generation(
+            document_context=document_context,
+            retrieval_input=retrieval_input,
             question=question,
             persona=persona,
-            hallucination_types=hallucination_types,
-            expected_error_count=expected_error_count,
+            generation_types=self._generation_types_for_card(hint_types, 0),
             teacher_user_id=teacher.user_id,
-            retrieval_input=retrieval_input,
-            document_context=document_context,
         )
         if not pipeline.is_ready_for_save:
             log_stage2_generation_failed(
@@ -205,102 +199,30 @@ class Stage2Service:
             )
             raise Stage2LangflowServiceUnavailableError()
 
-        langflow_result = pipeline.result
-        generated_errors = langflow_result.generated_errors
-
-        saved_path: Path | None = None
-        try:
-            assignment = Assignment(
-                teacher_id=teacher.user_id,
-                class_id=teacher.class_id,
-                title=title,
-                stage=2,
-                subject=subject,
-                description=question,
-                max_attempts=settings.STAGE2_MAX_ATTEMPTS,
-            )
-            assignment = await self.assignment_repository.create(assignment)
-
-            saved_path = await self._save_upload_file(
-                assignment.assignment_id, filename, content
-            )
-            document = Document(
-                assignment_id=assignment.assignment_id,
-                subject=subject,
-                filename=filename,
-                file_path=str(saved_path),
-                file_type=suffix.lstrip("."),
-                raw_text=document_context.generation_text,
-            )
-            document = await self.document_repository.create(document)
-
-            detail = Stage2AssignmentDetail(
-                assignment_id=assignment.assignment_id,
-                document_id=document.document_id,
-                question=question,
-                persona=persona,
-                hallucinated_ai_answer=langflow_result.flawed_ai_response,
-                hallucination_types=hallucination_types,
-                expected_error_count=expected_error_count,
-            )
-            detail = await self.stage2_detail_repository.create(detail)
-            await self.stage2_detail_repository.set_generation_metadata(
-                detail,
-                build_stage2_generation_metadata(pipeline),
-            )
-
-            response_errors: list[Stage2GeneratedErrorItem] = []
-            for error in generated_errors:
-                row = Stage2ErrorAnswer(
-                    assignment_id=assignment.assignment_id,
-                    detail_id=detail.detail_id,
-                    error_sentence=error.error_sentence,
-                    error_type=error.error_type,
-                    start_index=error.start_index,
-                    end_index=error.end_index,
-                    correct_sentence=error.correct_sentence,
-                    hallucination_reason=error.hallucination_reason,
-                    evidence_sentence=error.evidence_sentence,
-                )
-                row = await self.stage2_error_answer_repository.create(row)
-                response_errors.append(
-                    Stage2GeneratedErrorItem(
-                        answer_id=row.answer_id,
-                        error_sentence=row.error_sentence or "",
-                        error_type=row.error_type or "",
-                        start_index=row.start_index or 0,
-                        end_index=row.end_index or 0,
-                        correct_sentence=row.correct_sentence or "",
-                        hallucination_reason=row.hallucination_reason or "",
-                        evidence_sentence=row.evidence_sentence or "",
-                    )
-                )
-
-            await self.session.commit()
-        except Exception:
-            await self.session.rollback()
-            if saved_path is not None:
-                saved_path.unlink(missing_ok=True)
-                parent = saved_path.parent
-                if parent.exists() and not any(parent.iterdir()):
-                    parent.rmdir()
-            raise
+        _, response = await self._persist_generated_card(
+            teacher=teacher,
+            title=title,
+            subject=subject,
+            question=question,
+            persona=persona,
+            hint_types=hint_types,
+            pipeline=pipeline,
+            upload=upload,
+            document_context=document_context,
+            set_id=None,
+            publish_status=AssignmentPublishStatus.PUBLISHED.value,
+        )
 
         log_stage2_generation_succeeded(
             teacher_user_id=teacher.user_id,
-            assignment_id=assignment.assignment_id,
+            assignment_id=response.assignment_id,
             generation_attempts=pipeline.generation_attempts,
-            error_type_counts=summarize_error_type_counts(generated_errors),
+            error_type_counts=summarize_error_type_counts(
+                pipeline.result.generated_errors
+            ),
         )
 
-        return Stage2CreateResponse(
-            assignment_id=assignment.assignment_id,
-            title=title,
-            question=question,
-            flawed_ai_response=langflow_result.flawed_ai_response,
-            expected_error_count=expected_error_count,
-            generated_errors=response_errors,
-        )
+        return response
 
     # ------------------------------------------------------------------
     # Student: detail
@@ -704,6 +626,180 @@ class Stage2Service:
             final_correct_sentence=final_sentence,
             feedback_details=feedback_details,
         )
+
+    async def _prepare_upload(self, file: UploadFile) -> _PreparedStage2Upload:
+        filename = (file.filename or "").strip()
+        if not filename:
+            raise InvalidStage2CreateError()
+
+        suffix = Path(filename).suffix.lower()
+        if suffix not in _ALLOWED_EXTENSIONS:
+            raise UnsupportedStage2FileTypeError()
+
+        content = await file.read()
+        if not content:
+            raise InvalidStage2CreateError()
+        if len(content) > settings.STAGE2_MAX_UPLOAD_BYTES:
+            raise Stage2FileTooLargeError()
+
+        try:
+            raw_text = extract_text_from_upload(filename, content)
+            if not raw_text.strip():
+                raise Stage2DocumentProcessingError()
+        except UnsupportedStage2FileTypeError:
+            raise
+        except Stage2DocumentProcessingError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("stage2 document processing failed")
+            raise Stage2DocumentProcessingError() from exc
+
+        return _PreparedStage2Upload(
+            filename=filename,
+            content=content,
+            suffix=suffix,
+            raw_text=raw_text,
+        )
+
+    @staticmethod
+    def _generation_types_for_card(hint_types: list[str], card_index: int) -> list[str]:
+        if not hint_types:
+            raise InvalidStage2CreateError()
+        rotated = hint_types[card_index % len(hint_types)]
+        return [rotated]
+
+    async def _run_stage2_generation(
+        self,
+        *,
+        document_context: Stage2DocumentContext,
+        retrieval_input,
+        question: str,
+        persona: str,
+        generation_types: list[str],
+        teacher_user_id: int,
+    ) -> Stage2GenerationPipelineResult:
+        return await self.generation_orchestrator.generate(
+            document_text=document_context.generation_text,
+            question=question,
+            persona=persona,
+            hallucination_types=generation_types,
+            expected_error_count=CARD_EXPECTED_ERROR_COUNT,
+            teacher_user_id=teacher_user_id,
+            retrieval_input=retrieval_input,
+            document_context=document_context,
+        )
+
+    async def _persist_generated_card(
+        self,
+        *,
+        teacher: User,
+        title: str,
+        subject: str,
+        question: str,
+        persona: str,
+        hint_types: list[str],
+        pipeline: Stage2GenerationPipelineResult,
+        upload: _PreparedStage2Upload,
+        document_context: Stage2DocumentContext,
+        set_id: int | None,
+        publish_status: str,
+    ) -> tuple[Assignment, Stage2CreateResponse]:
+        langflow_result = pipeline.result
+        generated_errors = langflow_result.generated_errors
+
+        saved_path: Path | None = None
+        try:
+            assignment = Assignment(
+                teacher_id=teacher.user_id,
+                class_id=teacher.class_id,
+                title=title,
+                stage=2,
+                subject=subject,
+                description=question,
+                max_attempts=settings.STAGE2_MAX_ATTEMPTS,
+                set_id=set_id,
+                publish_status=publish_status,
+            )
+            assignment = await self.assignment_repository.create(assignment)
+
+            if set_id is None and publish_status == AssignmentPublishStatus.DRAFT.value:
+                assignment.set_id = assignment.assignment_id
+                assignment = await self.assignment_repository.update(assignment)
+
+            saved_path = await self._save_upload_file(
+                assignment.assignment_id, upload.filename, upload.content
+            )
+            document = Document(
+                assignment_id=assignment.assignment_id,
+                subject=subject,
+                filename=upload.filename,
+                file_path=str(saved_path),
+                file_type=upload.suffix.lstrip("."),
+                raw_text=document_context.generation_text,
+            )
+            document = await self.document_repository.create(document)
+
+            detail = Stage2AssignmentDetail(
+                assignment_id=assignment.assignment_id,
+                document_id=document.document_id,
+                question=question,
+                persona=persona,
+                hallucinated_ai_answer=langflow_result.flawed_ai_response,
+                hallucination_types=hint_types,
+                expected_error_count=CARD_EXPECTED_ERROR_COUNT,
+            )
+            detail = await self.stage2_detail_repository.create(detail)
+            await self.stage2_detail_repository.set_generation_metadata(
+                detail,
+                build_stage2_generation_metadata(pipeline),
+            )
+
+            response_errors: list[Stage2GeneratedErrorItem] = []
+            for error in generated_errors:
+                row = Stage2ErrorAnswer(
+                    assignment_id=assignment.assignment_id,
+                    detail_id=detail.detail_id,
+                    error_sentence=error.error_sentence,
+                    error_type=error.error_type,
+                    start_index=error.start_index,
+                    end_index=error.end_index,
+                    correct_sentence=error.correct_sentence,
+                    hallucination_reason=error.hallucination_reason,
+                    evidence_sentence=error.evidence_sentence,
+                )
+                row = await self.stage2_error_answer_repository.create(row)
+                response_errors.append(
+                    Stage2GeneratedErrorItem(
+                        answer_id=row.answer_id,
+                        error_sentence=row.error_sentence or "",
+                        error_type=row.error_type or "",
+                        start_index=row.start_index or 0,
+                        end_index=row.end_index or 0,
+                        correct_sentence=row.correct_sentence or "",
+                        hallucination_reason=row.hallucination_reason or "",
+                        evidence_sentence=row.evidence_sentence or "",
+                    )
+                )
+
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            if saved_path is not None:
+                saved_path.unlink(missing_ok=True)
+                parent = saved_path.parent
+                if parent.exists() and not any(parent.iterdir()):
+                    parent.rmdir()
+            raise
+
+        response = Stage2CreateResponse(
+            assignment_id=assignment.assignment_id,
+            title=title,
+            question=question,
+            flawed_ai_response=langflow_result.flawed_ai_response,
+            expected_error_count=CARD_EXPECTED_ERROR_COUNT,
+            generated_errors=response_errors,
+        )
+        return assignment, response
 
     async def _get_authorized_teacher(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)

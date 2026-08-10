@@ -241,7 +241,7 @@ async def create_step2_assignment(
         ...,
         description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
     ),
-    expected_error_count: int = Form(..., ge=1, le=5),
+    expected_error_count: int = Form(1, ge=1, le=1),
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
