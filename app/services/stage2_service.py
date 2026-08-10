@@ -367,6 +367,53 @@ class Stage2Service:
             failed_cards=failed_cards,
         )
 
+    async def get_step2_set(self, user_id: int, set_id: int) -> Stage2SetDetailResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        assignments = await self._get_teacher_set_assignments(teacher.user_id, set_id)
+        cards = await self._build_set_card_previews(assignments)
+        first_detail = await self.stage2_detail_repository.get_by_assignment_id(
+            assignments[0].assignment_id
+        )
+        if first_detail is None:
+            raise Stage2SetNotFoundError()
+
+        return Stage2SetDetailResponse(
+            set_id=set_id,
+            title=self._strip_card_title_suffix(assignments[0].title or ""),
+            question=first_detail.question or "",
+            persona=first_detail.persona or "",
+            hallucination_type_hints=self._parse_stored_hallucination_types(
+                first_detail.hallucination_types
+            ),
+            cards=cards,
+        )
+
+    async def publish_step2_set(
+        self,
+        user_id: int,
+        set_id: int,
+        payload: Stage2SetPublishRequest,
+    ) -> Stage2SetPublishResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        assignments = await self._get_teacher_set_assignments(teacher.user_id, set_id)
+        valid_ids = {assignment.assignment_id for assignment in assignments}
+        requested_ids = set(payload.assignment_ids)
+        if not requested_ids <= valid_ids:
+            raise InvalidStage2SetError()
+
+        published_ids: list[int] = []
+        for assignment in assignments:
+            if assignment.assignment_id in requested_ids:
+                assignment.publish_status = AssignmentPublishStatus.PUBLISHED.value
+                published_ids.append(assignment.assignment_id)
+                await self.assignment_repository.update(assignment)
+
+        await self.session.commit()
+        return Stage2SetPublishResponse(
+            set_id=set_id,
+            published_assignment_ids=sorted(published_ids),
+        )
+
     # ------------------------------------------------------------------
     # Student: detail
     # ------------------------------------------------------------------
@@ -943,6 +990,70 @@ class Stage2Service:
             generated_errors=response_errors,
         )
         return assignment, response
+
+    async def _get_teacher_set_assignments(
+        self, teacher_id: int, set_id: int
+    ) -> list[Assignment]:
+        assignments = await self.assignment_repository.list_by_set_id(set_id)
+        owned = [
+            assignment
+            for assignment in assignments
+            if assignment.teacher_id == teacher_id and assignment.stage == 2
+        ]
+        if not owned:
+            raise Stage2SetNotFoundError()
+        return owned
+
+    async def _build_set_card_previews(
+        self, assignments: list[Assignment]
+    ) -> list[Stage2SetCardPreview]:
+        cards: list[Stage2SetCardPreview] = []
+        for card_index, assignment in enumerate(assignments):
+            detail = await self.stage2_detail_repository.get_by_assignment_id(
+                assignment.assignment_id
+            )
+            if detail is None:
+                continue
+            error_rows = await self.stage2_error_answer_repository.list_by_assignment_id(
+                assignment.assignment_id
+            )
+            generated_errors = [
+                Stage2GeneratedErrorItem(
+                    answer_id=row.answer_id,
+                    error_sentence=row.error_sentence or "",
+                    error_type=row.error_type or "",
+                    start_index=row.start_index or 0,
+                    end_index=row.end_index or 0,
+                    correct_sentence=row.correct_sentence or "",
+                    hallucination_reason=row.hallucination_reason or "",
+                    evidence_sentence=row.evidence_sentence or "",
+                )
+                for row in error_rows
+            ]
+            generation_error_type = (
+                generated_errors[0].error_type if generated_errors else ""
+            )
+            cards.append(
+                Stage2SetCardPreview(
+                    assignment_id=assignment.assignment_id,
+                    card_index=card_index,
+                    title=assignment.title or "",
+                    flawed_ai_response=detail.hallucinated_ai_answer or "",
+                    expected_error_count=detail.expected_error_count or CARD_EXPECTED_ERROR_COUNT,
+                    generation_error_type=generation_error_type,
+                    generated_errors=generated_errors,
+                    publish_status=assignment.publish_status,
+                    generation_succeeded=True,
+                )
+            )
+        return cards
+
+    @staticmethod
+    def _strip_card_title_suffix(title: str) -> str:
+        marker = " · 카드 "
+        if marker in title:
+            return title.split(marker, 1)[0]
+        return title
 
     async def _get_authorized_teacher(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)

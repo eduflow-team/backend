@@ -17,6 +17,9 @@ from app.schemas.stage2 import (
     Stage2AssignmentDetailResponse,
     Stage2CreateResponse,
     Stage2SetCreateResponse,
+    Stage2SetDetailResponse,
+    Stage2SetPublishRequest,
+    Stage2SetPublishResponse,
     Step2CorrectionRequest,
     Step2CorrectionResponse,
     Step2HighlightRequest,
@@ -298,3 +301,43 @@ async def create_step2_set(
         card_count=card_count,
         file=file,
     )
+
+
+@router.get(
+    "/teacher/assignments/step2/set/{set_id}",
+    summary="2단계 카드 세트 조회",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage2SetDetailResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step2_set(
+    set_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2SetDetailResponse:
+    return await Stage2Service(db).get_step2_set(user_id, set_id)
+
+
+@router.patch(
+    "/teacher/assignments/step2/set/{set_id}",
+    summary="2단계 카드 세트 배포",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage2SetPublishResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def publish_step2_set(
+    set_id: int,
+    payload: Stage2SetPublishRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2SetPublishResponse:
+    return await Stage2Service(db).publish_step2_set(user_id, set_id, payload)
