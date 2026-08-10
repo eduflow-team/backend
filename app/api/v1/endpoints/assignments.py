@@ -169,7 +169,7 @@ async def submit_step2_correction(
 async def create_step1_assignment(
     class_id: int = Form(..., description="과제를 배정할 학급 ID"),
     subject: str = Form(...),
-    default_chunk_size: int = Form(200),
+    default_chunk_size: int = Form(50),
     default_top_k: int = Form(2),
     default_temperature: float = Form(1.0),
     file: UploadFile = File(...),

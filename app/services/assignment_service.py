@@ -502,7 +502,7 @@ class AssignmentService:
 
     def _parse_parameters(self, raw: dict | None) -> Stage1Parameters:
         if not raw:
-            return Stage1Parameters(chunk_size=200, top_k=2, temperature=1.0)
+            return Stage1Parameters(chunk_size=50, top_k=2, temperature=1.0)
         try:
             return Stage1Parameters(
                 chunk_size=int(raw["chunk_size"]),
