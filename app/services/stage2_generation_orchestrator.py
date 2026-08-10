@@ -172,6 +172,9 @@ class Stage2GenerationOrchestrator:
             aligned_result = align_stage2_generation_result(
                 langflow_result,
                 document_text=document_text,
+                candidate_chunk_texts=[
+                    chunk.text for chunk in resolved_retrieval_input.candidate_chunks
+                ],
                 hallucination_types=hallucination_types,
                 expected_error_count=expected_error_count,
             )

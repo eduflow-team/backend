@@ -143,3 +143,64 @@ def test_align_dedupes_repeated_error_sentences() -> None:
     )
 
     assert aligned.flawed_ai_response.count(sentence) == 1
+
+
+def test_align_repairs_fake_evidence_from_candidate_chunks() -> None:
+    document_text = (
+        "⑤ 송, 원 등은 취안저우 등 무역항에 시박사\n"
+        "를 설치하여 무역을 관리하였다."
+    )
+    candidate_chunks = [
+        "장영실은 자격루와 측우기를 발명한 과학자이다. "
+        "자격루는 물의 흐름을 이용한 물시계이다.",
+    ]
+    result = Stage2LangflowGenerationResult(
+        flawed_ai_response="장영실은 연을 발명했다.",
+        generated_errors=[
+            Stage2GeneratedErrorDraft(
+                error_sentence="장영실은 연을 발명했다.",
+                error_type="INFORMATION_FABRICATION",
+                correct_sentence="자격루는 물의 흐름을 이용한 물시계이다.",
+                hallucination_reason="문서에 연 발명 근거가 없다.",
+                evidence_sentence="본문 16쪽",
+            ),
+        ],
+    )
+
+    aligned = align_stage2_generation_result(
+        result,
+        document_text=document_text,
+        candidate_chunk_texts=candidate_chunks,
+        hallucination_types=["INFORMATION_FABRICATION"],
+        expected_error_count=1,
+    )
+
+    evidence = aligned.generated_errors[0].evidence_sentence
+    assert "본문 16쪽" not in evidence
+    assert "자격루" in evidence or "물시계" in evidence
+
+
+def test_align_strips_exposed_correct_sentence() -> None:
+    correct = "자격루는 물의 흐름을 이용한 물시계이다."
+    error = "장영실은 연을 발명했다."
+    result = Stage2LangflowGenerationResult(
+        flawed_ai_response=f"도입. {error} {correct}",
+        generated_errors=[
+            Stage2GeneratedErrorDraft(
+                error_sentence=error,
+                error_type="INFORMATION_FABRICATION",
+                correct_sentence=correct,
+                hallucination_reason="reason",
+                evidence_sentence="evidence",
+            ),
+        ],
+    )
+
+    aligned = align_stage2_generation_result(
+        result,
+        hallucination_types=["INFORMATION_FABRICATION"],
+        expected_error_count=1,
+    )
+
+    assert correct not in aligned.flawed_ai_response
+    assert error in aligned.flawed_ai_response

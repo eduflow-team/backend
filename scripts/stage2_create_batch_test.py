@@ -284,7 +284,20 @@ def print_summary(summary: BatchSummary, log_metrics: dict[str, dict[str, object
     print("=" * 72)
 
 
+def maybe_sync_langflow_flow() -> None:
+    if os.getenv("STAGE2_SYNC_LANGFLOW", "1").strip().lower() in {"0", "false", "no"}:
+        return
+    sync_script = Path(__file__).resolve().parent / "patch_langflow_stage2_from_repo.py"
+    if not sync_script.exists():
+        return
+    import subprocess
+
+    print("syncing Langflow stage2 flow from repo...")
+    subprocess.run([sys.executable, str(sync_script)], check=False)
+
+
 def main() -> None:
+    maybe_sync_langflow_flow()
     fixture = resolve_fixture()
     if not fixture.exists():
         print(f"FAIL: fixture missing: {fixture}")

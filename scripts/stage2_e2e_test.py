@@ -90,7 +90,20 @@ def submit_highlight(
         fail(f"highlight status={response.status_code} body={response.text[:400]}")
     body = response.json()
     if not body["results"][0]["is_correct"]:
-        fail(f"highlight not correct: {json.dumps(body, ensure_ascii=False)[:500]}")
+        report = body["results"][0].get("evaluation_report", {})
+        fail(
+            "highlight not correct: "
+            + json.dumps(
+                {
+                    "highlighted_text": body["results"][0].get("highlighted_text"),
+                    "student_error_type": body["results"][0].get("student_error_type"),
+                    "evaluation_report": report,
+                    "evidence_sentence": error.get("evidence_sentence"),
+                    "hallucination_reason": error.get("hallucination_reason"),
+                },
+                ensure_ascii=False,
+            )[:1200]
+        )
     return body
 
 
@@ -192,6 +205,18 @@ def main() -> None:
 
     assignment_id = create_body["assignment_id"]
     generated_errors = create_body["generated_errors"]
+    print(
+        json.dumps(
+            {
+                "stage": "create_ok",
+                "assignment_id": assignment_id,
+                "generated_error_types": [e["error_type"] for e in generated_errors],
+                "evidence_sentences": [e.get("evidence_sentence", "")[:80] for e in generated_errors],
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
 
     student_token = httpx.post(
         f"{api}/auth/login",

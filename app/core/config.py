@@ -15,17 +15,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080
 
-    # OpenAI (문서 임베딩·질의 임베딩·채점 피드백용)
+    # OpenAI (문서 임베딩·질의 임베딩·Stage2 G-Eval 채점)
     OPENAI_API_KEY: str = ""
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_EMBEDDING_DIMENSIONS: int = 768
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
-
-    # G-Eval judge (OpenAI-compatible: Ollama / vLLM 등)
-    # 설정 시 OPENAI_API_KEY보다 G-Eval에 우선 사용
-    GEVAL_LLM_BASE_URL: str = ""
-    GEVAL_LLM_MODEL: str = ""
-    GEVAL_LLM_API_KEY: str = "ollama"
 
     # Langflow
     LANGFLOW_URL: str = "http://localhost:7860"

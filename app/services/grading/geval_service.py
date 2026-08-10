@@ -21,7 +21,17 @@ _REASONING_RUBRIC = """\
 1) student_reason이 reference_document·evidence_sentence와 연결되는가
 2) hallucination_reason과 논리적으로 일치하는가
 3) student_error_type과 설명이 맞는가
-4) 1~5점 부여 (1=근거 없음, 3=부분 설명, 5=문서 근거·유형·논리 모두 타당)
+4) 1~5점 부여
+
+점수 가이드 (중·고등 교육용):
+- 5점: 문서 근거 인용 + 환각 유형 + 이유가 모두 명확
+- 4점: 근거와 유형은 타당하나 설명이 다소 짧음
+- 3점: 근거 또는 유형 중 하나만 부분적으로 맞음
+- 1~2점: 근거 없음 또는 유형 불일치
+
+참고: 하이라이트 위치와 환각 유형은 시스템에서 이미 맞다고 판정되었습니다.
+student_reason이 evidence_sentence·hallucination_reason을 활용해 논리를 설명했는지에 집중하세요.
+evidence_sentence가 PDF 추출 조각이어도 student_reason이 그 내용을 인용·연결했다면 4점 이상을 부여하세요.
 """
 
 _CORRECTION_RUBRIC = """\
@@ -30,9 +40,17 @@ _CORRECTION_RUBRIC = """\
 - completeness: original_highlight 오류 구간이 의미상 충분히 교정되었는가
 
 평가 단계:
-1) 참고 문서·정답 문장과 사실 일치 여부 확인
-2) 오류 구간이 의미상 완전히 교정되었는지 확인
-3) factual_accuracy, completeness 각각 1~5 정수 부여 (4 이상이 통과)
+1) student_answer가 correct_sentence와 **의미상 동일하거나 포함 관계**이면 factual_accuracy는 4~5
+2) student_answer가 reference_document·evidence_sentence와 모순되지 않으면 factual_accuracy 가산
+3) original_highlight의 잘못된 주장이 사라지고 올바른 사실로 바뀌었는지 completeness 판단
+4) factual_accuracy, completeness 각각 1~5 정수 부여
+
+점수 가이드 (중·고등 교육용):
+- factual_accuracy 5: correct_sentence와 사실·표현이 거의 같음
+- factual_accuracy 4: 핵심 사실은 맞고 표현만 다름
+- factual_accuracy 3: 일부 맞으나 중요한 사실 누락·오류
+- completeness 5: 오류 구간이 완전히 교정됨
+- completeness 4: 핵심 오류는 제거되었으나 부연 설명이 부족
 """
 
 
@@ -97,7 +115,7 @@ class GEvalService:
         llm_config = resolve_geval_llm_config()
         if llm_config is not None:
             try:
-                return await self._evaluate_reasoning_llm(
+                evaluation = await self._evaluate_reasoning_llm(
                     llm_config=llm_config,
                     student_reason=student_reason,
                     student_error_type=student_error_type,
@@ -107,12 +125,26 @@ class GEvalService:
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("G-Eval reasoning failed; using fallback")
+                evaluation = self._evaluate_reasoning_fallback(
+                    student_reason=student_reason,
+                    hallucination_reason=hallucination_reason,
+                    evidence_sentence=evidence_sentence,
+                    reference_document=reference_document,
+                )
+        else:
+            evaluation = self._evaluate_reasoning_fallback(
+                student_reason=student_reason,
+                hallucination_reason=hallucination_reason,
+                evidence_sentence=evidence_sentence,
+                reference_document=reference_document,
+            )
 
-        return self._evaluate_reasoning_fallback(
+        return _finalize_reasoning_evaluation(
+            evaluation,
             student_reason=student_reason,
+            student_error_type=student_error_type,
             hallucination_reason=hallucination_reason,
             evidence_sentence=evidence_sentence,
-            reference_document=reference_document,
         )
 
     async def _evaluate_reasoning_llm(
@@ -176,13 +208,12 @@ class GEvalService:
         if reference_hits >= 2 and len(reason_tokens) >= 5 and (
             reason_hits >= 1 or reference_hits >= 3
         ):
-            return ReasoningEvaluation(
-                reasoning_score=1.0,
-                ai_feedback=(
-                    "완벽합니다! 원본 문서에 없는 내용이 개입된 환각을 정확히 찾아내셨고, "
-                    "환각 유형과 이유 설명도 타당합니다."
-                ),
+            score = 1.0
+            feedback = (
+                "완벽합니다! 원본 문서에 없는 내용이 개입된 환각을 정확히 찾아내셨고, "
+                "환각 유형과 이유 설명도 타당합니다."
             )
+            return ReasoningEvaluation(reasoning_score=score, ai_feedback=feedback)
 
         coverage = reference_hits / max(len(reason_tokens), 1)
         alignment = reason_hits / max(len(_tokenize(hallucination_reason)), 1)
@@ -219,6 +250,13 @@ class GEvalService:
         hallucination_reason: str,
         evidence_sentence: str,
     ) -> CorrectionEvaluation:
+        if _answers_equivalent(student_answer, correct_sentence):
+            return CorrectionEvaluation(
+                factual_accuracy=5,
+                completeness=5,
+                ai_feedback="문서 근거에 맞게 수정되었습니다.",
+            )
+
         llm_config = resolve_geval_llm_config()
         if llm_config is not None:
             try:
@@ -271,6 +309,9 @@ class GEvalService:
         )
         factual = max(1, min(5, int(parsed.get("factual_accuracy", 1))))
         completeness = max(1, min(5, int(parsed.get("completeness", 1))))
+        if _answers_equivalent(student_answer, correct_sentence):
+            factual = 5
+            completeness = 5
         feedback = str(parsed.get("feedback", "")).strip() or _correction_feedback(
             factual, completeness
         )
@@ -337,32 +378,14 @@ class GEvalService:
 
 
 def resolve_geval_llm_config() -> GEvalLlmConfig | None:
-    """G-Eval judge용 OpenAI-compatible 엔드포인트를 반환한다."""
-    base_url = settings.GEVAL_LLM_BASE_URL.strip()
-    model = settings.GEVAL_LLM_MODEL.strip()
-    if base_url and model:
-        return GEvalLlmConfig(
-            chat_completions_url=_chat_completions_url(base_url),
-            api_key=settings.GEVAL_LLM_API_KEY.strip() or "ollama",
-            model=model,
-        )
-
-    if settings.OPENAI_API_KEY.strip():
-        return GEvalLlmConfig(
-            chat_completions_url="https://api.openai.com/v1/chat/completions",
-            api_key=settings.OPENAI_API_KEY.strip(),
-            model=settings.OPENAI_CHAT_MODEL,
-        )
-    return None
-
-
-def _chat_completions_url(base_url: str) -> str:
-    normalized = base_url.rstrip("/")
-    if normalized.endswith("/chat/completions"):
-        return normalized
-    if normalized.endswith("/v1"):
-        return f"{normalized}/chat/completions"
-    return f"{normalized}/v1/chat/completions"
+    """G-Eval judge용 OpenAI Chat Completions 설정을 반환한다."""
+    if not settings.OPENAI_API_KEY.strip():
+        return None
+    return GEvalLlmConfig(
+        chat_completions_url="https://api.openai.com/v1/chat/completions",
+        api_key=settings.OPENAI_API_KEY.strip(),
+        model=settings.OPENAI_CHAT_MODEL,
+    )
 
 
 async def _request_geval_json(
@@ -399,6 +422,71 @@ async def _request_geval_json(
         .strip()
     )
     return _parse_json_content(content)
+
+
+def _finalize_reasoning_evaluation(
+    evaluation: ReasoningEvaluation,
+    *,
+    student_reason: str,
+    student_error_type: str,
+    hallucination_reason: str,
+    evidence_sentence: str,
+) -> ReasoningEvaluation:
+    if not _qualifies_for_structured_reasoning_pass(
+        student_reason=student_reason,
+        student_error_type=student_error_type,
+        hallucination_reason=hallucination_reason,
+        evidence_sentence=evidence_sentence,
+    ):
+        return evaluation
+    return ReasoningEvaluation(
+        reasoning_score=max(
+            evaluation.reasoning_score,
+            settings.STAGE2_REASONING_THRESHOLD,
+        ),
+        ai_feedback=evaluation.ai_feedback,
+    )
+
+
+def _qualifies_for_structured_reasoning_pass(
+    *,
+    student_reason: str,
+    student_error_type: str,
+    hallucination_reason: str,
+    evidence_sentence: str,
+) -> bool:
+    reason = student_reason.strip()
+    if len(reason) < 25:
+        return False
+    if student_error_type not in reason:
+        return False
+
+    evidence = evidence_sentence.strip()
+    if evidence:
+        compact_reason = re.sub(r"\s+", "", reason.lower())
+        compact_evidence = re.sub(r"\s+", "", evidence.lower())
+        if len(compact_evidence) >= 6:
+            prefix = compact_evidence[: min(12, len(compact_evidence))]
+            if prefix not in compact_reason and compact_evidence not in compact_reason:
+                return False
+
+    hall_tokens = _tokenize(hallucination_reason)
+    reason_tokens = _tokenize(reason)
+    if hall_tokens and not (hall_tokens & reason_tokens):
+        return False
+    return True
+
+
+def _answers_equivalent(left: str, right: str) -> bool:
+    normalized_left = re.sub(r"\s+", " ", left.strip().lower())
+    normalized_right = re.sub(r"\s+", " ", right.strip().lower())
+    if not normalized_left or not normalized_right:
+        return False
+    return (
+        normalized_left == normalized_right
+        or normalized_left in normalized_right
+        or normalized_right in normalized_left
+    )
 
 
 def _correction_feedback(factual: int, completeness: int) -> str:
