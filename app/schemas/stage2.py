@@ -76,6 +76,51 @@ class Stage2CreateResponse(BaseModel):
     generated_errors: list[Stage2GeneratedErrorItem]
 
 
+class Stage2SetCardFailure(BaseModel):
+    card_index: int
+    failure_codes: list[str]
+
+
+class Stage2SetCardPreview(BaseModel):
+    assignment_id: int | None = None
+    card_index: int
+    title: str
+    flawed_ai_response: str = ""
+    expected_error_count: int = 1
+    generation_error_type: str = ""
+    generated_errors: list[Stage2GeneratedErrorItem] = Field(default_factory=list)
+    publish_status: str = "DRAFT"
+    generation_succeeded: bool = True
+    failure_codes: list[str] = Field(default_factory=list)
+
+
+class Stage2SetCreateResponse(BaseModel):
+    set_id: int
+    title: str
+    question: str
+    card_count: int
+    cards: list[Stage2SetCardPreview]
+    failed_cards: list[Stage2SetCardFailure]
+
+
+class Stage2SetDetailResponse(BaseModel):
+    set_id: int
+    title: str
+    question: str
+    persona: str
+    hallucination_type_hints: list[str]
+    cards: list[Stage2SetCardPreview]
+
+
+class Stage2SetPublishRequest(BaseModel):
+    assignment_ids: list[int] = Field(..., min_length=1)
+
+
+class Stage2SetPublishResponse(BaseModel):
+    set_id: int
+    published_assignment_ids: list[int]
+
+
 class Step2HighlightSubmissionItem(BaseModel):
     highlighted_text: str = Field(..., min_length=1)
     student_error_type: str = Field(..., min_length=1)

@@ -343,3 +343,17 @@ class Stage2LangflowServiceUnavailableError(DomainException):
     default_message = (
         "AI 답변 생성 서비스에 일시적 장애가 발생했습니다. 잠시 후 다시 시도해 주세요."
     )
+
+
+class Stage2SetNotFoundError(DomainException):
+    """존재하지 않는 Stage2 세트를 조회·배포할 때 발생 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "존재하지 않는 세트입니다."
+
+
+class InvalidStage2SetError(DomainException):
+    """세트 배포 요청이 유효하지 않을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "세트 배포 요청이 올바르지 않습니다."

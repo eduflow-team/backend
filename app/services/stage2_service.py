@@ -23,6 +23,7 @@ from app.core.exceptions import (
     InvalidStage2CreateError,
     InvalidStage2CorrectionError,
     InvalidStage2HighlightError,
+    InvalidStage2SetError,
     InvalidTokenError,
     Stage2AccessForbiddenError,
     Stage2CorrectionAlreadySubmittedError,
@@ -32,6 +33,7 @@ from app.core.exceptions import (
     Stage2HighlightPhaseIncompleteError,
     Stage2LangflowServiceUnavailableError,
     Stage2ReferenceDocumentNotFoundError,
+    Stage2SetNotFoundError,
     UnsupportedStage2FileTypeError,
 )
 from app.models.assignment import Assignment
@@ -65,6 +67,12 @@ from app.schemas.stage2 import (
     Stage2AttemptsDetail,
     Stage2CreateResponse,
     Stage2GeneratedErrorItem,
+    Stage2SetCardFailure,
+    Stage2SetCardPreview,
+    Stage2SetCreateResponse,
+    Stage2SetDetailResponse,
+    Stage2SetPublishRequest,
+    Stage2SetPublishResponse,
     Step2CorrectionFeedbackDetail,
     Step2CorrectionRequest,
     Step2CorrectionResponse,
@@ -223,6 +231,141 @@ class Stage2Service:
         )
 
         return response
+
+    async def create_step2_set(
+        self,
+        user_id: int,
+        *,
+        title: str,
+        subject: str,
+        question: str,
+        persona: str,
+        hallucination_types_raw: str,
+        card_count: int,
+        file: UploadFile,
+    ) -> Stage2SetCreateResponse:
+        teacher = await self._get_authorized_teacher(user_id)
+        if teacher.class_id is None:
+            raise Stage2AccessForbiddenError()
+
+        title = (title or "").strip()
+        subject = (subject or "").strip()
+        question = (question or "").strip()
+        persona = (persona or "").strip()
+        if not title or not subject or not question or not persona:
+            raise InvalidStage2CreateError()
+
+        if len(persona) > 100:
+            raise InvalidStage2CreateError()
+
+        if not (1 <= card_count <= 5):
+            raise InvalidStage2CreateError()
+
+        hint_types = self._parse_hallucination_types(hallucination_types_raw)
+        upload = await self._prepare_upload(file)
+
+        document_context = resolve_stage2_document_context(
+            source_text=upload.raw_text,
+            question=question,
+        )
+        retrieval_input = build_stage2_retrieval_input_from_candidates(
+            document_context.chunk_candidates,
+        )
+
+        set_id: int | None = None
+        cards: list[Stage2SetCardPreview] = []
+        failed_cards: list[Stage2SetCardFailure] = []
+
+        for card_index in range(card_count):
+            generation_types = self._generation_types_for_card(hint_types, card_index)
+            card_title = f"{title} · 카드 {card_index + 1}"
+
+            log_stage2_generation_started(
+                teacher_user_id=teacher.user_id,
+                expected_error_count=CARD_EXPECTED_ERROR_COUNT,
+                hallucination_types=generation_types,
+                filename=upload.filename,
+            )
+
+            pipeline = await self._run_stage2_generation(
+                document_context=document_context,
+                retrieval_input=retrieval_input,
+                question=question,
+                persona=persona,
+                generation_types=generation_types,
+                teacher_user_id=teacher.user_id,
+            )
+
+            if not pipeline.is_ready_for_save:
+                log_stage2_generation_failed(
+                    teacher_user_id=teacher.user_id,
+                    generation_attempts=pipeline.generation_attempts,
+                    failure_codes=pipeline.failure_codes,
+                )
+                failed_cards.append(
+                    Stage2SetCardFailure(
+                        card_index=card_index,
+                        failure_codes=list(pipeline.failure_codes),
+                    )
+                )
+                continue
+
+            assignment, card_response = await self._persist_generated_card(
+                teacher=teacher,
+                title=card_title,
+                subject=subject,
+                question=question,
+                persona=persona,
+                hint_types=hint_types,
+                pipeline=pipeline,
+                upload=upload,
+                document_context=document_context,
+                set_id=set_id,
+                publish_status=AssignmentPublishStatus.DRAFT.value,
+            )
+
+            if set_id is None:
+                set_id = assignment.set_id or assignment.assignment_id
+
+            log_stage2_generation_succeeded(
+                teacher_user_id=teacher.user_id,
+                assignment_id=assignment.assignment_id,
+                generation_attempts=pipeline.generation_attempts,
+                error_type_counts=summarize_error_type_counts(
+                    pipeline.result.generated_errors
+                ),
+            )
+
+            generation_error_type = (
+                card_response.generated_errors[0].error_type
+                if card_response.generated_errors
+                else generation_types[0]
+            )
+            cards.append(
+                Stage2SetCardPreview(
+                    assignment_id=assignment.assignment_id,
+                    card_index=card_index,
+                    title=card_title,
+                    flawed_ai_response=card_response.flawed_ai_response,
+                    expected_error_count=CARD_EXPECTED_ERROR_COUNT,
+                    generation_error_type=generation_error_type,
+                    generated_errors=card_response.generated_errors,
+                    publish_status=AssignmentPublishStatus.DRAFT.value,
+                    generation_succeeded=True,
+                )
+            )
+
+        if set_id is None:
+            raise Stage2LangflowServiceUnavailableError()
+
+        return Stage2SetCreateResponse(
+            set_id=set_id,
+            title=title,
+            question=question,
+            card_count=card_count,
+            cards=cards,
+            failed_cards=failed_cards,
+        )
 
     # ------------------------------------------------------------------
     # Student: detail

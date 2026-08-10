@@ -16,6 +16,7 @@ from app.schemas.dashboard import ErrorDetail
 from app.schemas.stage2 import (
     Stage2AssignmentDetailResponse,
     Stage2CreateResponse,
+    Stage2SetCreateResponse,
     Step2CorrectionRequest,
     Step2CorrectionResponse,
     Step2HighlightRequest,
@@ -254,5 +255,46 @@ async def create_step2_assignment(
         persona=persona,
         hallucination_types_raw=hallucination_types,
         expected_error_count=expected_error_count,
+        file=file,
+    )
+
+
+@router.post(
+    "/teacher/assignments/step2/set",
+    summary="2단계 카드 세트 생성",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Stage2SetCreateResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        413: {"model": ErrorDetail},
+        415: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
+)
+async def create_step2_set(
+    title: str = Form(...),
+    subject: str = Form(...),
+    question: str = Form(...),
+    persona: str = Form(..., max_length=100),
+    hallucination_types: str = Form(
+        ...,
+        description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
+    ),
+    card_count: int = Form(..., ge=1, le=5),
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2SetCreateResponse:
+    return await Stage2Service(db).create_step2_set(
+        user_id,
+        title=title,
+        subject=subject,
+        question=question,
+        persona=persona,
+        hallucination_types_raw=hallucination_types,
+        card_count=card_count,
         file=file,
     )
