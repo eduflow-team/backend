@@ -107,6 +107,8 @@ class Stage1AssignmentDetailResponse(BaseModel):
 class Stage1CreateResponse(BaseModel):
     assignment_id: int
     created_at: datetime | None
+    question: str
+    guideline: str
 
     @field_serializer("created_at")
     def serialize_created_at(self, value: datetime | None) -> str | None:

@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     STAGE1_MAX_ATTEMPTS: int = 3
     # chat/create에서 허용하는 chunk_size (업로드 시 전부에 전부 임베딩)
     STAGE1_CHUNK_SIZE_PRESETS: tuple[int, ...] = (50, 200, 500, 1200, 3000)
+    # 학생 AI 채팅용 고정 질문 가이드 (교사가 입력하지 않음)
+    STAGE1_FIXED_GUIDELINE: str = (
+        '"오늘 학습 주제의 내용을 전체적으로 알려줘"라고 AI에게 질문해보세요.'
+    )
+    STAGE1_QUESTION_FALLBACK: str = (
+        "업로드한 학습 자료에 대해 AI에게 질문하고, "
+        "파라미터를 조절하여 자료에 가장 잘 맞는 답변을 찾아보세요."
+    )
 
     # Stage 2
     STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB

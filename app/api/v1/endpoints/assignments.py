@@ -169,8 +169,6 @@ async def submit_step2_correction(
 async def create_step1_assignment(
     class_id: int = Form(..., description="과제를 배정할 학급 ID"),
     subject: str = Form(...),
-    question: str = Form(...),
-    guideline: str = Form(...),
     default_chunk_size: int = Form(200),
     default_top_k: int = Form(2),
     default_temperature: float = Form(1.0),
@@ -178,12 +176,11 @@ async def create_step1_assignment(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> Stage1CreateResponse:
+    """자료 업로드 시 문제는 AI가 생성하고, 가이드라인은 서버 고정값을 사용한다."""
     return await AssignmentService(db).create_step1_assignment(
         user_id,
         class_id=class_id,
         subject=subject,
-        question=question,
-        guideline=guideline,
         default_chunk_size=default_chunk_size,
         default_top_k=default_top_k,
         default_temperature=default_temperature,
