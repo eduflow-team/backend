@@ -235,3 +235,47 @@ python scripts/stage2_e2e_test.py
 - **G-Eval baseline·임계값 검증** (step 18): reasoning/correction 임계값 실측 조정
 - **Langflow 가용성**: 연속 호출 시 간헐적 503 — infra/timeout 별도 대응
 - **파인튜닝 검토** (step 19): Flow+검증 후에도 품질 부족 시 골드 데이터 수집
+
+---
+
+## 카드형 세트 출제 (정책 변경 · 구현 체크리스트)
+
+**정책:** 과제 1장 = 환각 **1개** (`expected_error_count=1`). 학생은 카드(과제) 여러 장.  
+**학생 API 4개·필드명·Notion `API 명세서 (1)`는 변경하지 않는다** (배열 필드는 길이 0~1로 사용).  
+**DB 수정:** [`stage2-db-upgrade.md`](stage2-db-upgrade.md) (`assignments.set_id`, `publish_status`만 추가).
+
+### 바꾸지 않음
+
+| 항목 | 비고 |
+|------|------|
+| `GET/POST .../step2` (detail, highlight, correction, document) | 스키마 동일 |
+| Highlight / Correction 채점 (`HighlightGrader`, `GEvalService`) | 장당 1회 플로우 |
+| Langflow / `ai` Flow | 호출 시 `expected_error_count=1`, `hallucination_types` 1개 |
+| DB `stage2_*` 테이블 | 세트 묶음은 선택(아래) |
+
+### 백엔드 구현 (우선순위)
+
+| # | 작업 | 설명 |
+|---|------|------|
+| 1 | **세트 생성 API** | `POST /teacher/assignments/step2/set` (multipart). PDF·질문·페르소나 1회, `card_count` 1~5, `hallucination_types` 체크박스(배열). |
+| 2 | **카드별 생성 루프** | PDF 파싱·`chunk_candidates` **1회** → 카드마다 `expected_error_count=1`, 유형 **로테이션**(체크한 유형 순환). 기존 `create_step2_assignment` 로직 재사용. |
+| 3 | **초안·배포 상태** | 생성 직후 `DRAFT`, 교사 선택 후 `PUBLISHED` (또는 `assignments` 플래그/`stage2_set` 테이블). 학생 detail은 **PUBLISHED만** 노출. |
+| 4 | **세트 조회·선택** | `GET /teacher/assignments/step2/set/{set_id}` — 후보 카드 미리보기(`flawed_ai_response`, `error_type`, `generated_errors` 교사용). `PATCH`로 포함 카드 ID 목록 확정·배포. |
+| 5 | **단건 create 정리** | 기존 `POST .../step2` 유지하되 `expected_error_count` **1만 허용**하거나, 세트 API만 노출 (팀 선택). |
+| 6 | **학생 목록** | 기존 `GET /student/dashboard/assignments` + `stage=2` 필터로 카드 목록 (신규 API 없이 MVP 가능). |
+| 7 | **테스트·스크립트** | E2E·batch 기본값 `expected_error_count=1`. 세트 생성·부분 실패·배포 통합 테스트 추가. |
+
+### 생성 시간·동시성
+
+- 카드 N장 = Langflow **N회** (순차 권장, 진행률 `2/N` 응답).
+- 병렬 3은 인프라 여유 시 선택 (`STAGE2_SET_PARALLELISM`).
+
+### 프론트 (참고, backend 범위外)
+
+- 교사: 카드 수 드롭다운(1~5), 유형 체크박스, 미리보기·체크·배포.
+- 학생: `stage2-verify.html` / React — **1환각·1카드** UI (진행 0/1, 교정 1칸).
+
+### AI 레포
+
+- **필수 변경 없음** (`expected_error_count=1` 이미 지원).
+
