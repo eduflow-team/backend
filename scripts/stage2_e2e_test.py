@@ -122,9 +122,7 @@ def main() -> None:
         ).split(",")
         if value.strip()
     }
-    expected_error_count = int(
-        os.getenv("STAGE2_TEST_EXPECTED_ERROR_COUNT", str(len(allowed_types)))
-    )
+    expected_error_count = int(os.getenv("STAGE2_TEST_EXPECTED_ERROR_COUNT", "1"))
     question = os.getenv(
         "STAGE2_TEST_QUESTION",
         "장영실의 발명품에 대해 설명해줘.",

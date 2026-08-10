@@ -131,7 +131,7 @@ def create_assignment(session: Session, *, title: str) -> dict:
                         [value.strip().upper() for value in types.split(",") if value.strip()],
                         ensure_ascii=False,
                     ),
-                    "expected_error_count": os.getenv("STAGE2_TEST_EXPECTED_ERROR_COUNT", "2"),
+                    "expected_error_count": os.getenv("STAGE2_TEST_EXPECTED_ERROR_COUNT", "1"),
                 },
                 files={"file": (session.fixture.name, doc, fixture_mime(session.fixture))},
                 timeout=180.0,

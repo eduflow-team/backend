@@ -125,7 +125,7 @@ def run_create(
                 ],
                 ensure_ascii=False,
             ),
-            "expected_error_count": os.getenv("STAGE2_TEST_EXPECTED_ERROR_COUNT", "2"),
+            "expected_error_count": os.getenv("STAGE2_TEST_EXPECTED_ERROR_COUNT", "1"),
         },
         files={"file": (upload_name, content, "application/pdf")},
         timeout=300.0,

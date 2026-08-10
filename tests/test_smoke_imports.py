@@ -92,9 +92,13 @@ def test_import_stage2_generation_logging() -> None:
 
 
 def test_import_stage2_response_validation() -> None:
-    from app.services.stage2_response_validation import validate_stage2_create_response
+    from app.services.stage2_response_validation import (
+        validate_stage2_create_response,
+        validate_stage2_set_create_response,
+    )
 
     assert validate_stage2_create_response is not None
+    assert validate_stage2_set_create_response is not None
 
 
 def test_import_highlight_grader() -> None:

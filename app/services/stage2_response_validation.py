@@ -147,3 +147,74 @@ def validate_stage2_create_response(
         raise Stage2E2EValidationError(
             "generated error types do not cover teacher selection"
         )
+
+
+STAGE2_CARD_EXPECTED_ERROR_COUNT = 1
+
+
+def validate_stage2_set_card_preview(
+    card: dict,
+    *,
+    allowed_types: set[str] | frozenset[str],
+    document_text: str | None = None,
+) -> None:
+    """세트 응답의 성공 카드 1장 품질을 검증한다."""
+    if card.get("expected_error_count") != STAGE2_CARD_EXPECTED_ERROR_COUNT:
+        raise Stage2E2EValidationError("card expected_error_count must be 1")
+    if not card.get("generation_succeeded", True):
+        return
+
+    flawed_ai_response = (card.get("flawed_ai_response") or "").strip()
+    if not flawed_ai_response:
+        raise Stage2E2EValidationError("card flawed_ai_response is empty")
+
+    generated_errors = card.get("generated_errors")
+    if not isinstance(generated_errors, list):
+        raise Stage2E2EValidationError("card generated_errors must be a list")
+    if len(generated_errors) != STAGE2_CARD_EXPECTED_ERROR_COUNT:
+        raise Stage2E2EValidationError("card generated_errors count must be 1")
+
+    for error in generated_errors:
+        validate_generated_error_item(
+            error,
+            flawed_ai_response=flawed_ai_response,
+            allowed_types=allowed_types,
+            document_text=document_text,
+        )
+
+
+def validate_stage2_set_create_response(
+    body: dict,
+    *,
+    card_count: int,
+    allowed_types: set[str] | frozenset[str],
+    document_text: str | None = None,
+) -> None:
+    """set create API 응답 품질을 검증한다."""
+    required_keys = {
+        "set_id",
+        "title",
+        "question",
+        "card_count",
+        "cards",
+        "failed_cards",
+    }
+    missing = required_keys - set(body.keys())
+    if missing:
+        raise Stage2E2EValidationError(f"set create response missing keys: {sorted(missing)}")
+
+    if body["card_count"] != card_count:
+        raise Stage2E2EValidationError("card_count mismatch")
+    if not isinstance(body.get("cards"), list):
+        raise Stage2E2EValidationError("cards must be a list")
+    if not isinstance(body.get("failed_cards"), list):
+        raise Stage2E2EValidationError("failed_cards must be a list")
+
+    for card in body["cards"]:
+        if not isinstance(card, dict):
+            raise Stage2E2EValidationError("card item must be an object")
+        validate_stage2_set_card_preview(
+            card,
+            allowed_types=allowed_types,
+            document_text=document_text,
+        )

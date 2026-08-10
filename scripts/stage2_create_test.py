@@ -79,7 +79,7 @@ def main() -> None:
                 "hallucination_types": json.dumps(
                     ["PERSONA_BIAS", "RETRIEVAL_ERROR"], ensure_ascii=False
                 ),
-                "expected_error_count": "2",
+                "expected_error_count": "1",
             },
             files={"file": ("stage2_doc.txt", doc, "text/plain")},
             timeout=60.0,
@@ -96,7 +96,7 @@ def main() -> None:
     try:
         validate_stage2_create_response(
             body,
-            expected_error_count=2,
+            expected_error_count=1,
             allowed_types=allowed_types,
             document_text=document_text,
         )
