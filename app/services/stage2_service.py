@@ -524,6 +524,10 @@ class Stage2Service:
         if not highlighted_text or not student_reason:
             raise InvalidStage2HighlightError()
 
+        type_hints = self._parse_stored_hallucination_types(detail.hallucination_types)
+        if type_hints and item.student_error_type not in type_hints:
+            raise InvalidStage2HighlightError()
+
         max_attempts = assignment.max_attempts or settings.STAGE2_MAX_ATTEMPTS
         status = await self.status_repository.get_or_create(
             student.user_id,
@@ -536,6 +540,11 @@ class Stage2Service:
         prior_highlights = await self.highlight_repository.list_by_user_and_assignment(
             student.user_id, assignment_id
         )
+        cleared_before = self._collect_cleared_highlights(prior_highlights)
+        expected_count = detail.expected_error_count or 0
+        if len(cleared_before) >= expected_count > 0:
+            raise InvalidStage2HighlightError()
+
         if len(prior_highlights) >= max_attempts:
             raise Stage2HighlightLimitExceededError()
 
@@ -1076,6 +1085,8 @@ class Stage2Service:
     ) -> tuple[Assignment, Stage2AssignmentDetail]:
         assignment = await self.assignment_repository.get_by_id(assignment_id)
         if assignment is None or assignment.stage != 2:
+            raise AssignmentNotFoundError("존재하지 않는 과제입니다.")
+        if assignment.publish_status != AssignmentPublishStatus.PUBLISHED.value:
             raise AssignmentNotFoundError("존재하지 않는 과제입니다.")
         if student.class_id is None or assignment.class_id != student.class_id:
             raise Stage2AccessForbiddenError()

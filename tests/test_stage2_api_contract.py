@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.main import app
 from app.models.assignment import Assignment
 from app.models.document import Document
-from app.models.enums import ProgressStatus
+from app.models.enums import AssignmentPublishStatus, ProgressStatus
 from app.models.stage import Stage2AssignmentDetail, Stage2ErrorAnswer
 from app.models.student_status import StudentAssignmentStatus
 from app.models.submission import Stage2HighlightSubmission
@@ -247,6 +247,7 @@ def _assignment() -> Assignment:
         title="Stage 2 과제",
         stage=2,
         max_attempts=5,
+        publish_status=AssignmentPublishStatus.PUBLISHED.value,
     )
 
 
