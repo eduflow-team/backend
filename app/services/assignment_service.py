@@ -101,8 +101,6 @@ class AssignmentService:
         *,
         class_id: int,
         subject: str,
-        question: str,
-        guideline: str,
         default_chunk_size: int,
         default_top_k: int,
         default_temperature: float,
@@ -114,10 +112,8 @@ class AssignmentService:
             raise Stage1AccessForbiddenError()
 
         subject = (subject or "").strip()
-        question = (question or "").strip()
-        guideline = (guideline or "").strip()
         filename = (file.filename or "").strip()
-        if not subject or not question or not guideline or not filename:
+        if not subject or not filename:
             raise InvalidStage1CreateError()
 
         self._validate_parameters(default_chunk_size, default_top_k, default_temperature)
@@ -142,6 +138,13 @@ class AssignmentService:
         except Exception as exc:  # noqa: BLE001
             logger.exception("stage1 document processing failed")
             raise Stage1DocumentProcessingError() from exc
+
+        guideline = settings.STAGE1_FIXED_GUIDELINE
+        question = await self._generate_student_question(
+            raw_text=raw_text,
+            subject=subject,
+            filename=filename,
+        )
 
         assignment = Assignment(
             teacher_id=teacher.user_id,
@@ -199,6 +202,8 @@ class AssignmentService:
         return Stage1CreateResponse(
             assignment_id=assignment.assignment_id,
             created_at=assignment.created_at or datetime.now(UTC),
+            question=question,
+            guideline=guideline,
         )
 
     # ------------------------------------------------------------------
@@ -497,7 +502,7 @@ class AssignmentService:
 
     def _parse_parameters(self, raw: dict | None) -> Stage1Parameters:
         if not raw:
-            return Stage1Parameters(chunk_size=200, top_k=2, temperature=0.9)
+            return Stage1Parameters(chunk_size=50, top_k=2, temperature=1.0)
         try:
             return Stage1Parameters(
                 chunk_size=int(raw["chunk_size"]),
@@ -619,12 +624,14 @@ class AssignmentService:
         ranked.sort(key=lambda item: item[0], reverse=True)
 
         selected = ranked[:top_k]
-        context = "\n\n".join(text for _, text in selected)
+        previews = [text.strip() for _, text in selected if text.strip()]
+        context = "\n\n".join(previews)
         best_score = selected[0][0] if selected else 0.0
         visualization = RagProcessVisualization(
             total_chunks=len(chunk_vectors),
             retrieved_chunks=len(selected),
             vector_search_score=round(best_score, 4),
+            retrieved_chunk_previews=previews,
         )
         return context, visualization
 
@@ -703,6 +710,82 @@ class AssignmentService:
                 "chunk_size·top_k·temperature를 바꿔 보며 원문에 더 가까운 답을 찾아보세요."
             )
         return faithfulness, relevance, current_score, feedback
+
+    async def _generate_student_question(
+        self,
+        *,
+        raw_text: str,
+        subject: str,
+        filename: str,
+    ) -> str:
+        """업로드 문서에서 학생이 볼 '문제(미션)' 문장을 생성한다."""
+        fallback = settings.STAGE1_QUESTION_FALLBACK
+        if not settings.OPENAI_API_KEY:
+            return fallback
+
+        preview = (raw_text or "").strip()[:2500]
+        if not preview:
+            return fallback
+
+        prompt = (
+            "중·고등학생 AI 리터러시 수업용 1단계 과제입니다.\n"
+            "학생이 AI에게 질문하고 chunk_size·top_k·temperature를 조절해 "
+            "업로드 자료에 맞는 답을 찾는 활동입니다.\n"
+            "아래 학습 자료 일부를 읽고, 학생 화면에 보여줄 '문제(미션)'를 "
+            "한국어 1~2문장으로 작성하세요.\n"
+            "규칙:\n"
+            "- 학생이 AI 채팅창에 그대로 칠 '채팅 질문'을 쓰지 마세요.\n"
+            "- '~에 대해 AI에게 질문하고, 파라미터를 조절하여 … 찾아보세요' 형태의 미션으로 쓰세요.\n"
+            "- 자료의 학습 주제(단원·핵심 개념)를 자연스럽게 넣으세요.\n"
+            "- 따옴표·번호·제목 없이 문장만 출력하세요.\n\n"
+            f"교과 코드: {subject}\n"
+            f"파일명: {filename}\n"
+            f"자료 일부:\n{preview}\n"
+        )
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.OPENAI_CHAT_MODEL,
+                        "temperature": 0.4,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "당신은 교사 보조 AI입니다. "
+                                    "학생용 과제 미션 문장만 간결하게 출력하세요."
+                                ),
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+                .strip('"')
+                .strip("'")
+            )
+            if not content:
+                return fallback
+            # 한 줄로 정리
+            content = re.sub(r"\s+", " ", content)
+            return content[:400]
+        except Exception:  # noqa: BLE001
+            logger.exception("stage1 student question generation failed; using fallback")
+            return fallback
 
     async def _generate_ai_feedback(
         self,

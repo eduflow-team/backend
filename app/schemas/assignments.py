@@ -31,6 +31,8 @@ class RagProcessVisualization(BaseModel):
     total_chunks: int
     retrieved_chunks: int
     vector_search_score: float
+    # 학생이 답과 대조할 수 있도록 검색된 청크 본문(순서=유사도 높은 순)
+    retrieved_chunk_previews: list[str] = Field(default_factory=list)
 
 
 class Stage1ChatResponse(BaseModel):
@@ -105,6 +107,8 @@ class Stage1AssignmentDetailResponse(BaseModel):
 class Stage1CreateResponse(BaseModel):
     assignment_id: int
     created_at: datetime | None
+    question: str
+    guideline: str
 
     @field_serializer("created_at")
     def serialize_created_at(self, value: datetime | None) -> str | None:
