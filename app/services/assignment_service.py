@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
+from app.core.datetime_utils import normalize_assignment_due_at
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage1CreateError,
@@ -101,6 +102,7 @@ class AssignmentService:
         *,
         class_id: int,
         subject: str,
+        due_at: datetime,
         default_chunk_size: int,
         default_top_k: int,
         default_temperature: float,
@@ -116,6 +118,7 @@ class AssignmentService:
         if not subject or not filename:
             raise InvalidStage1CreateError()
 
+        due_at = normalize_assignment_due_at(due_at)
         self._validate_parameters(default_chunk_size, default_top_k, default_temperature)
 
         suffix = Path(filename).suffix.lower()
@@ -153,6 +156,7 @@ class AssignmentService:
             stage=1,
             subject=subject,
             description=question,
+            due_at=due_at,
             max_attempts=settings.STAGE1_MAX_ATTEMPTS,
         )
         assignment = await self.assignment_repository.create(assignment)
@@ -202,6 +206,7 @@ class AssignmentService:
         return Stage1CreateResponse(
             assignment_id=assignment.assignment_id,
             created_at=assignment.created_at or datetime.now(UTC),
+            due_at=assignment.due_at,
             question=question,
             guideline=guideline,
         )
@@ -252,6 +257,7 @@ class AssignmentService:
             assignment_id=assignment.assignment_id,
             question=detail.question or "",
             guideline=detail.guideline or "",
+            due_at=assignment.due_at,
             parameter_explanations=PARAMETER_EXPLANATIONS,
             default_parameters=default_params,
             attempts=Stage1AttemptsDetail(

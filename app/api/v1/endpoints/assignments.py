@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,6 +171,7 @@ async def submit_step2_correction(
 async def create_step1_assignment(
     class_id: int = Form(..., description="과제를 배정할 학급 ID"),
     subject: str = Form(...),
+    due_at: datetime = Form(..., description="마감 일시 (ISO 8601)"),
     default_chunk_size: int = Form(50),
     default_top_k: int = Form(2),
     default_temperature: float = Form(1.0),
@@ -181,6 +184,7 @@ async def create_step1_assignment(
         user_id,
         class_id=class_id,
         subject=subject,
+        due_at=due_at,
         default_chunk_size=default_chunk_size,
         default_top_k=default_top_k,
         default_temperature=default_temperature,
@@ -208,6 +212,7 @@ async def create_step2_assignment(
     subject: str = Form(...),
     question: str = Form(...),
     persona: str = Form(..., max_length=100),
+    due_at: datetime = Form(..., description="마감 일시 (ISO 8601)"),
     hallucination_types: str = Form(
         ...,
         description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
@@ -223,6 +228,7 @@ async def create_step2_assignment(
         subject=subject,
         question=question,
         persona=persona,
+        due_at=due_at,
         hallucination_types_raw=hallucination_types,
         expected_error_count=expected_error_count,
         file=file,

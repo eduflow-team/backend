@@ -8,15 +8,16 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
-
+from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
+from app.core.datetime_utils import normalize_assignment_due_at
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage2CreateError,
@@ -105,6 +106,7 @@ class Stage2Service:
         subject: str,
         question: str,
         persona: str,
+        due_at: datetime,
         hallucination_types_raw: str,
         expected_error_count: int,
         file: UploadFile,
@@ -124,6 +126,7 @@ class Stage2Service:
         if len(persona) > 100:
             raise InvalidStage2CreateError()
 
+        due_at = normalize_assignment_due_at(due_at)
         hallucination_types = self._parse_hallucination_types(hallucination_types_raw)
         if not (1 <= expected_error_count <= 5):
             raise InvalidStage2CreateError()
@@ -173,6 +176,7 @@ class Stage2Service:
             stage=2,
             subject=subject,
             description=question,
+            due_at=due_at,
             max_attempts=settings.STAGE2_MAX_ATTEMPTS,
         )
         assignment = await self.assignment_repository.create(assignment)
@@ -235,6 +239,7 @@ class Stage2Service:
             title=title,
             question=question,
             flawed_ai_response=langflow_result.flawed_ai_response,
+            due_at=assignment.due_at,
             expected_error_count=expected_error_count,
             generated_errors=response_errors,
         )
@@ -288,6 +293,7 @@ class Stage2Service:
             reference_document_text=reference_text,
             question=detail.question or "",
             flawed_ai_response=detail.hallucinated_ai_answer or "",
+            due_at=assignment.due_at,
             expected_error_count=expected_count,
             hallucination_type_options=[
                 HallucinationTypeOption(**item) for item in HALLUCINATION_TYPE_OPTIONS
