@@ -36,8 +36,20 @@ class Settings(BaseSettings):
     STAGE1_MAX_ATTEMPTS: int = 3
     # chat/create에서 허용하는 chunk_size (업로드 시 전부에 전부 임베딩)
     STAGE1_CHUNK_SIZE_PRESETS: tuple[int, ...] = (50, 200, 500, 1200, 3000)
-    # 최종점수 = 품질점수 × (1 − λ × 움직임). λ가 클수록 파라미터를 많이 바꾼 패널티↑
-    STAGE1_MOVEMENT_LAMBDA: float = 0.25
+    # 최종점수 = 0.8×optimal근접 + 0.2×답변품질
+    STAGE1_PROXIMITY_WEIGHT: float = 0.8
+    STAGE1_QUALITY_WEIGHT: float = 0.2
+    # optimal 탐색: 최고 품질의 이 비율 이상인 후보 중 가장 약한 설정을 고름
+    STAGE1_OPTIMAL_ELBOW_RATIO: float = 0.90
+    STAGE1_OPTIMAL_TOP_K_CANDIDATES: tuple[int, ...] = (1, 2, 3, 5, 8)
+    STAGE1_OPTIMAL_TEMP_CANDIDATES: tuple[float, ...] = (0.0, 0.2, 0.5, 1.0)
+    STAGE1_OPTIMAL_FALLBACK: dict = {
+        "chunk_size": 500,
+        "top_k": 3,
+        "temperature": 0.2,
+    }
+    # 학생 AI 채팅·optimal 탐색용 고정 질문
+    STAGE1_FIXED_CHAT_MESSAGE: str = "오늘 학습 주제의 내용을 전체적으로 알려줘"
     # 학생 AI 채팅용 고정 질문 가이드 (교사가 입력하지 않음)
     STAGE1_FIXED_GUIDELINE: str = (
         '"오늘 학습 주제의 내용을 전체적으로 알려줘"라고 AI에게 질문해보세요.'

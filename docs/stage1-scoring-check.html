@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stage1 채점 방식 (확인용)</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+    />
+    <style>
+      :root {
+        --ink: #0d0d0d;
+        --muted: #6e6e80;
+        --line: #e5e5e5;
+        --bg: #fff;
+        --fill: #f7f7f8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Pretendard, -apple-system, sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+        line-height: 1.55;
+        padding: 32px 20px 64px;
+      }
+      main { width: min(720px, 100%); margin: 0 auto; }
+      h1 { font-size: 24px; letter-spacing: -0.03em; margin: 0 0 8px; }
+      .sub { color: var(--muted); margin: 0 0 28px; }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px 16px;
+        margin-bottom: 14px;
+        background: #fff;
+      }
+      .card h2 { margin: 0 0 10px; font-size: 15px; }
+      .formula {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: var(--fill);
+        border-radius: 10px;
+        padding: 12px 14px;
+        font-size: 13px;
+      }
+      table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+      th { color: var(--muted); font-weight: 550; font-size: 12px; }
+      .ok { font-weight: 650; }
+      ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+      .tag {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: var(--ink);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 600;
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="tag">Stage1 · 채점 변경 확인</p>
+      <h1>새 채점 방식</h1>
+      <p class="sub">
+        서버가 자료에 맞는 최적 파라미터를 찾아 두고, 학생이 그 설정에 가까울수록 높은 점수를
+        받습니다.
+      </p>
+
+      <section class="card">
+        <h2>최종 점수 공식</h2>
+        <div class="formula">최종 = 0.8 × optimal 근접점수 + 0.2 × 답변 품질점수</div>
+        <ul>
+          <li>근접점수: 학생 설정 ↔ DB optimal 거리 (가까울수록 100에 가까움)</li>
+          <li>품질점수: AI 답이 검색된 학습 자료와 얼마나 비슷한지 (기존 방식)</li>
+          <li>optimal은 학생에게 보이지 않음</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>optimal을 고르는 방법</h2>
+        <ul>
+          <li>고정 질문: 「오늘 학습 주제의 내용을 전체적으로 알려줘」</li>
+          <li>chunk_size × top_k를 돌려 검색 품질 측정</li>
+          <li>최고 품질의 90% 이상인 후보만 남김 (elbow)</li>
+          <li>그중 <strong>가장 약한 설정</strong>을 고름 (= 최소 설정으로 좋은 답)</li>
+          <li>temperature는 고품질 구간에서 <strong>가장 낮은 값</strong> 우선</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>예시 점수 경향 (optimal = 500 / 3 / 0.2 가정)</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>학생 설정</th>
+              <th>근접</th>
+              <th>품질(예)</th>
+              <th>최종(대략)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>500 / 3 / 0.2 (optimal)</td>
+              <td>100</td>
+              <td>90</td>
+              <td class="ok">98</td>
+            </tr>
+            <tr>
+              <td>200 / 2 / 0.5 (조금 다름)</td>
+              <td>78</td>
+              <td>70</td>
+              <td>76</td>
+            </tr>
+            <tr>
+              <td>50 / 1 / 1.0 (시작·약함)</td>
+              <td>45</td>
+              <td>30</td>
+              <td>42</td>
+            </tr>
+            <tr>
+              <td>3000 / 10 / 0.0 (max)</td>
+              <td>40</td>
+              <td>95</td>
+              <td>51</td>
+            </tr>
+          </tbody>
+        </table>
+        <ul>
+          <li>max는 품질이 좋아도 근접이 낮아 최종이 크게 오르지 않음</li>
+          <li>optimal 근처가 가장 유리</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>코드 반영 위치</h2>
+        <ul>
+          <li><code>stage1_assignment_details.optimal_parameters</code></li>
+          <li><code>AssignmentService._find_optimal_parameters</code> (create)</li>
+          <li><code>AssignmentService.submit_step1</code> (0.8 / 0.2 블렌드)</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

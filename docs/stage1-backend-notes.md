@@ -20,8 +20,8 @@ chat `rag_process_visualization`: `total_chunks`, `retrieved_chunks`, `vector_se
 ## 파라미터 · 학습 목표
 
 - 시작 default: `chunk_size=200`, `top_k=2`, `temperature=1.0` (부정확해지기 쉬운 시작점)
-- **PDF·질문마다 최적 조합이 다르다.** `1200/5/0`이 항상 최선은 아님
-- 학생은 파라미터를 바꿔 보고, preview·답·채점으로 이 자료에 맞는 값을 찾는다
+- **PDF마다 최적 조합이 다르다.** create 시 `optimal_parameters`를 서버가 찾아 저장
+- 학생은 파라미터를 바꿔 보고, preview·답·채점으로 이 자료에 맞는 값(optimal에 가까운 값)을 찾는다
 - 답변은 항상 존재 (거부 금지). 검색이 약하면 일반 지식 보완(틀린 답 가능), 관련 청크가 많으면 교재 우선
 
 `question`은 업로드 PDF에 있는 주제로 둘 것.
@@ -38,8 +38,12 @@ chat `rag_process_visualization`: `total_chunks`, `retrieved_chunks`, `vector_se
 ## submit
 
 - 마지막 제출만 `is_final=true`
-- `student_prompt` = chat 때 `message`
-- 채점: 원문 겹침(faithfulness/relevance/score) + OpenAI feedback (키 없으면 템플릿)
+- `student_prompt` = chat 때 `message` (고정 질문: `오늘 학습 주제의 내용을 전체적으로 알려줘`)
+- 채점: **`최종 = 0.8×optimal근접 + 0.2×답변품질`**
+  - `optimal_parameters`: create 시 서버가 자동 탐색해 DB 저장 (학생 API 미노출)
+  - 근접: 제출 파라미터 ↔ optimal 정규화 거리 → `100×(1−distance)`
+  - 품질: 제출 파라미터로 재검색한 청크 대비 답변 토큰 겹침 (기존과 동일)
+- optimal 탐색: 고정 질문으로 chunk×top_k 검색 품질 그리드 → 최고점의 90% 이상(elbow) 중 **가장 약한** 설정 → temperature는 생성 가능 시 고품질 대역의 **가장 낮은** 값
 
 ## Langflow
 

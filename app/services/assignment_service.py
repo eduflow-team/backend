@@ -132,7 +132,9 @@ class AssignmentService:
             raise Stage1FileTooLargeError()
 
         try:
-            raw_text = extract_text_from_upload(filename, content)
+            raw_text = await asyncio.to_thread(
+                extract_text_from_upload, filename, content
+            )
             preset_chunk_sets = await self._embed_preset_chunk_sets(raw_text)
         except UnsupportedStage1FileTypeError:
             raise
@@ -166,11 +168,15 @@ class AssignmentService:
             "top_k": default_top_k,
             "temperature": default_temperature,
         }
+        optimal_parameters = await self._find_optimal_parameters(
+            preset_chunk_sets=preset_chunk_sets,
+        )
         detail = Stage1AssignmentDetail(
             assignment_id=assignment.assignment_id,
             question=question,
             guideline=guideline,
             default_parameters=default_parameters,
+            optimal_parameters=optimal_parameters,
             parameter_guide=PARAMETER_EXPLANATIONS.model_dump(),
         )
         await self.stage1_detail_repository.create(detail)
@@ -361,9 +367,11 @@ class AssignmentService:
             raise AssignmentNotFoundError("과제 문서가 아직 준비되지 않았습니다.")
         document = documents[0]
 
-        # 전체 원문이 아니라 제출 파라미터로 다시 검색한 청크만 채점 기준에 쓴다.
-        # (긴 교재 전체와 겹치면 나쁜 파라미터 답도 100점이 나오던 문제 방지)
+        # 전체 원문이 아니라 제출 파라미터로 다시 검색한 청크만 품질 채점 기준으로 쓴다.
         default_params = self._parse_parameters(detail.default_parameters)
+        optimal_params = self._parse_parameters(
+            detail.optimal_parameters or settings.STAGE1_OPTIMAL_FALLBACK
+        )
         chunk_vectors = await self._load_or_build_chunk_vectors(
             document,
             requested_chunk_size=params.chunk_size,
@@ -380,11 +388,16 @@ class AssignmentService:
             source_text=source_text,
             question=assignment.description or "",
         )
-        movement = self._parameter_movement(
-            baseline=default_params,
+        distance = self._parameter_distance(
+            baseline=optimal_params,
             submitted=params,
         )
-        current_score = self._apply_movement_to_score(quality_score, movement)
+        proximity_score = int(round(100 * (1.0 - distance)))
+        proximity_score = max(0, min(100, proximity_score))
+        current_score = self._blend_proximity_and_quality(
+            proximity_score=proximity_score,
+            quality_score=quality_score,
+        )
 
         # records 대표 제출: 이전 final 해제 후 이번 제출만 is_final=True
         await self.submission_repository.clear_final_for_user_and_assignment(
@@ -424,8 +437,10 @@ class AssignmentService:
                 "faithfulness_score": report.faithfulness_score,
                 "relevance_score": report.relevance_score,
                 "quality_score": quality_score,
-                "parameter_movement": round(movement, 4),
-                "movement_lambda": settings.STAGE1_MOVEMENT_LAMBDA,
+                "proximity_score": proximity_score,
+                "parameter_distance_to_optimal": round(distance, 4),
+                "proximity_weight": settings.STAGE1_PROXIMITY_WEIGHT,
+                "quality_weight": settings.STAGE1_QUALITY_WEIGHT,
             },
         )
         await self.evaluation_repository.create(evaluation)
@@ -750,13 +765,13 @@ class AssignmentService:
             )
         return faithfulness, relevance, current_score, feedback
 
-    def _parameter_movement(
+    def _parameter_distance(
         self,
         *,
         baseline: Stage1Parameters,
         submitted: Stage1Parameters,
     ) -> float:
-        """과제 기본 파라미터 대비 제출 파라미터의 변경량 (0~1).
+        """두 파라미터 세트의 정규화 거리 (0~1).
 
         chunk_size·top_k 비중을 크게, temperature는 작게 반영한다.
         """
@@ -770,18 +785,199 @@ class AssignmentService:
 
         chunk_span = max(len(presets) - 1, 1)
         chunk_m = abs(_chunk_index(submitted.chunk_size) - _chunk_index(baseline.chunk_size)) / chunk_span
-        # UI에서 주로 쓰는 1~10 구간을 기준으로 정규화 (그 이상은 1로 캡)
         topk_m = min(1.0, abs(submitted.top_k - baseline.top_k) / 9.0)
         temp_m = min(1.0, abs(float(submitted.temperature) - float(baseline.temperature)))
-        movement = 0.45 * chunk_m + 0.40 * topk_m + 0.15 * temp_m
-        return max(0.0, min(1.0, movement))
+        distance = 0.45 * chunk_m + 0.40 * topk_m + 0.15 * temp_m
+        return max(0.0, min(1.0, distance))
+
+    def _blend_proximity_and_quality(
+        self, *, proximity_score: int, quality_score: int
+    ) -> int:
+        """최종 = 0.8×optimal근접 + 0.2×답변품질."""
+
+        w_p = float(settings.STAGE1_PROXIMITY_WEIGHT)
+        w_q = float(settings.STAGE1_QUALITY_WEIGHT)
+        final = w_p * proximity_score + w_q * quality_score
+        return max(0, min(100, int(round(final))))
+
+    async def _find_optimal_parameters(
+        self,
+        *,
+        preset_chunk_sets: list[tuple[int, list[tuple[str, list[float]]]]],
+    ) -> dict:
+        """자료에 맞는 최적 파라미터를 신중히 고른다.
+
+        목표: 답변(검색) 품질이 최고에 가까운 설정 중, 가장 약한(최소) 파라미터.
+
+        1) 고정 질문으로 chunk_size × top_k 그리드 검색 품질 측정
+        2) 최고 품질의 elbow 비율 이상인 후보만 남김
+        3) 그중 chunk/top_k가 가장 약한 조합 선택
+        4) 해당 조합으로 temperature 후보를 평가해, 고품질 대역에서 가장 낮은 temp 선택
+           (Langflow 불가 시 검색 품질만으로 temp는 낮은 값 우선)
+        """
+
+        fallback = dict(settings.STAGE1_OPTIMAL_FALLBACK)
+        question = settings.STAGE1_FIXED_CHAT_MESSAGE
+        elbow = float(settings.STAGE1_OPTIMAL_ELBOW_RATIO)
+        top_k_candidates = tuple(settings.STAGE1_OPTIMAL_TOP_K_CANDIDATES)
+        temp_candidates = tuple(settings.STAGE1_OPTIMAL_TEMP_CANDIDATES)
+        presets = list(settings.STAGE1_CHUNK_SIZE_PRESETS)
+
+        try:
+            query_embedding = await embed_text(question)
+        except Exception:  # noqa: BLE001
+            logger.exception("stage1 optimal: query embed failed, using fallback")
+            return fallback
+
+        retrieval_rows: list[dict] = []
+        for chunk_size, pairs in preset_chunk_sets:
+            if not pairs:
+                continue
+            ranked: list[tuple[float, str]] = []
+            for text, emb in pairs:
+                ranked.append((cosine_similarity(query_embedding, emb), text))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+
+            for top_k in top_k_candidates:
+                selected = ranked[:top_k]
+                if not selected:
+                    continue
+                mean_sim = sum(score for score, _ in selected) / len(selected)
+                context = "\n\n".join(text.strip() for _, text in selected if text.strip())
+                # 검색 품질: 평균 유사도 + 질문 토큰이 검색 결과에 얼마나 있는지
+                q_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", question))
+                c_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", context))
+                cover = (len(q_tokens & c_tokens) / max(len(q_tokens), 1)) if q_tokens else 0.0
+                quality = 100.0 * (0.7 * min(1.0, max(0.0, mean_sim)) + 0.3 * cover)
+                retrieval_rows.append(
+                    {
+                        "chunk_size": chunk_size,
+                        "top_k": top_k,
+                        "quality": quality,
+                        "context": context,
+                        "mean_sim": mean_sim,
+                    }
+                )
+
+        if not retrieval_rows:
+            logger.warning("stage1 optimal: no retrieval candidates, using fallback")
+            return fallback
+
+        max_quality = max(row["quality"] for row in retrieval_rows)
+        if max_quality <= 0:
+            return fallback
+
+        pool = [row for row in retrieval_rows if row["quality"] >= elbow * max_quality]
+        if not pool:
+            pool = [max(retrieval_rows, key=lambda row: row["quality"])]
+
+        def _chunk_index(size: int) -> int:
+            if size in presets:
+                return presets.index(size)
+            return min(range(len(presets)), key=lambda i: abs(presets[i] - size))
+
+        # 고품질 대역에서 가장 약한 chunk/top_k (최소 설정)
+        best_retrieval = min(
+            pool,
+            key=lambda row: (_chunk_index(row["chunk_size"]), row["top_k"], -row["quality"]),
+        )
+        best_chunk = int(best_retrieval["chunk_size"])
+        best_top_k = int(best_retrieval["top_k"])
+        context = best_retrieval["context"]
+
+        # temperature: 가능하면 실제 생성 품질로 고르고, 아니면 낮은 temp 우선
+        best_temp = await self._select_optimal_temperature(
+            context=context,
+            question=question,
+            temp_candidates=temp_candidates,
+            retrieval_quality=float(best_retrieval["quality"]),
+        )
+
+        optimal = {
+            "chunk_size": best_chunk,
+            "top_k": best_top_k,
+            "temperature": best_temp,
+        }
+        logger.info(
+            "stage1 optimal selected: %s (retrieval_max=%.2f, elbow=%.2f, pool=%d)",
+            optimal,
+            max_quality,
+            elbow,
+            len(pool),
+        )
+        return optimal
+
+    async def _select_optimal_temperature(
+        self,
+        *,
+        context: str,
+        question: str,
+        temp_candidates: tuple[float, ...],
+        retrieval_quality: float,
+    ) -> float:
+        """고품질 답 구간에서 가장 낮은 temperature를 고른다."""
+
+        if not context.strip():
+            return float(settings.STAGE1_OPTIMAL_FALLBACK["temperature"])
+
+        # Langflow 미설정이면 생성 없이 낮은 temp(교재 충실) 선택
+        if not (
+            settings.LANGFLOW_API_KEY
+            and settings.LANGFLOW_STAGE1_CHAT_FLOW_ID
+            and settings.LANGFLOW_STAGE1_PROMPT_NODE_ID
+            and settings.LANGFLOW_STAGE1_MODEL_NODE_ID
+        ):
+            return min(temp_candidates)
+
+        scored: list[tuple[float, float]] = []
+        for temp in temp_candidates:
+            try:
+                ai_response = await self.langflow_client.run_stage1_chat(
+                    message=question,
+                    context=context,
+                    temperature=float(temp),
+                )
+                _f, _r, quality, _fb = self._score_against_source(
+                    selected_ai_response=ai_response or "",
+                    source_text=context,
+                )
+                scored.append((float(temp), float(quality)))
+            except Exception:  # noqa: BLE001
+                logger.exception("stage1 optimal: temp=%.2f generation failed", temp)
+
+        if not scored:
+            return min(temp_candidates)
+
+        max_q = max(quality for _, quality in scored)
+        elbow = float(settings.STAGE1_OPTIMAL_ELBOW_RATIO)
+        # 생성 품질이 전부 너무 낮으면 검색 품질만으로 낮은 temp
+        if max_q < 20 and retrieval_quality > 0:
+            return min(temp_candidates)
+
+        pool = [(temp, quality) for temp, quality in scored if quality >= elbow * max_q]
+        if not pool:
+            pool = [max(scored, key=lambda item: item[1])]
+
+        # 고품질 중 가장 낮은 temperature (= 최소 설정으로 좋은 답)
+        return min(pool, key=lambda item: (item[0], -item[1]))[0]
+
+    # 하위 호환: 예전 이름 유지가 필요하면 distance로 위임
+    def _parameter_movement(
+        self,
+        *,
+        baseline: Stage1Parameters,
+        submitted: Stage1Parameters,
+    ) -> float:
+        return self._parameter_distance(baseline=baseline, submitted=submitted)
 
     def _apply_movement_to_score(self, quality_score: int, movement: float) -> int:
-        """최종 = 품질 × (1 − λ × 움직임). 같은 품질이면 덜 바꾼 쪽이 더 높다."""
+        """deprecated: proximity 블렌드로 대체. 테스트 호환용."""
 
-        lam = float(settings.STAGE1_MOVEMENT_LAMBDA)
-        final = quality_score * (1.0 - lam * movement)
-        return max(0, min(100, int(round(final))))
+        proximity = int(round(100 * (1.0 - movement)))
+        return self._blend_proximity_and_quality(
+            proximity_score=proximity,
+            quality_score=quality_score,
+        )
 
     async def _generate_student_question(
         self,
