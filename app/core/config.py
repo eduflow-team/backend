@@ -58,6 +58,15 @@ class Settings(BaseSettings):
         "업로드한 학습 자료에 대해 AI에게 질문하고, "
         "파라미터를 조절하여 자료에 가장 잘 맞는 답변을 찾아보세요."
     )
+    # 이미지 PDF OCR: pypdf 텍스트가 빈약하면 활성화
+    STAGE1_PDF_OCR_ENABLED: bool = True
+    STAGE1_PDF_OCR_MIN_CHARS: int = 200
+    STAGE1_PDF_OCR_MIN_HANGUL: int = 80
+    STAGE1_PDF_OCR_DPI: int = 200
+    STAGE1_PDF_OCR_LANG: str = "kor+eng"
+    # Tesseract 없을 때 OpenAI Vision으로 페이지 OCR (비용 발생)
+    STAGE1_PDF_OCR_OPENAI_FALLBACK: bool = True
+    STAGE1_PDF_OCR_MAX_PAGES: int = 40
 
     # Stage 2
     STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB

@@ -24,7 +24,10 @@ chat `rag_process_visualization`: `total_chunks`, `retrieved_chunks`, `vector_se
 - 학생은 파라미터를 바꿔 보고, preview·답·채점으로 이 자료에 맞는 값(optimal에 가까운 값)을 찾는다
 - 답변은 항상 존재 (거부 금지). 검색이 약하면 일반 지식 보완(틀린 답 가능), 관련 청크가 많으면 교재 우선
 
-`question`은 업로드 PDF에 있는 주제로 둘 것.
+- PDF: `pypdf` 텍스트 레이어 추출 → 본문이 빈약하면 **OCR 폴백**
+  - 1순위: Tesseract (`kor+eng`, Docker 이미지에 포함)
+  - 2순위: OpenAI Vision (Tesseract 없을 때, `OPENAI_API_KEY` 필요)
+- `question`은 업로드 PDF에 있는 주제로 둘 것.
 
 ---
 

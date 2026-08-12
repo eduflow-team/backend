@@ -6,6 +6,7 @@ Langflow HTTP 호출은 AI 총괄 연동 전까지 mock 응답을 반환한다.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -142,7 +143,9 @@ class Stage2Service:
             raise Stage2FileTooLargeError()
 
         try:
-            raw_text = extract_text_from_upload(filename, content)
+            raw_text = await asyncio.to_thread(
+                extract_text_from_upload, filename, content
+            )
             if not raw_text.strip():
                 raise Stage2DocumentProcessingError()
         except UnsupportedStage2FileTypeError:
