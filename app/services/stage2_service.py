@@ -191,12 +191,13 @@ class Stage2Service:
             document_context.chunk_candidates,
         )
 
-        pipeline = await self._run_stage2_generation(
+        pipeline = await self._generate_card_with_type_fallback(
             document_context=document_context,
             retrieval_input=retrieval_input,
             question=question,
             persona=persona,
-            generation_types=self._generation_types_for_card(hint_types, 0),
+            hint_types=hint_types,
+            card_index=0,
             teacher_user_id=teacher.user_id,
         )
         if not pipeline.is_ready_for_save:
@@ -287,12 +288,13 @@ class Stage2Service:
                 filename=upload.filename,
             )
 
-            pipeline = await self._run_stage2_generation(
+            pipeline = await self._generate_card_with_type_fallback(
                 document_context=document_context,
                 retrieval_input=retrieval_input,
                 question=question,
                 persona=persona,
-                generation_types=generation_types,
+                hint_types=hint_types,
+                card_index=card_index,
                 teacher_user_id=teacher.user_id,
             )
 
@@ -867,6 +869,44 @@ class Stage2Service:
         rotated = hint_types[card_index % len(hint_types)]
         return [rotated]
 
+    @staticmethod
+    def _generation_type_fallback_order(
+        hint_types: list[str], card_index: int
+    ) -> list[str]:
+        """카드 담당 유형을 먼저 쓰고, 실패하면 교사가 고른 나머지 유형으로 넘어간다."""
+        if not hint_types:
+            raise InvalidStage2CreateError()
+        start = card_index % len(hint_types)
+        return [hint_types[(start + offset) % len(hint_types)] for offset in range(len(hint_types))]
+
+    async def _generate_card_with_type_fallback(
+        self,
+        *,
+        document_context: Stage2DocumentContext,
+        retrieval_input,
+        question: str,
+        persona: str,
+        hint_types: list[str],
+        card_index: int,
+        teacher_user_id: int,
+    ) -> Stage2GenerationPipelineResult:
+        """한 유형이 계속 실패하면 다른 유형으로 바꿔 카드 생성을 재시도한다."""
+        pipeline: Stage2GenerationPipelineResult | None = None
+        for generation_type in self._generation_type_fallback_order(hint_types, card_index):
+            pipeline = await self._run_stage2_generation(
+                document_context=document_context,
+                retrieval_input=retrieval_input,
+                question=question,
+                persona=persona,
+                generation_types=[generation_type],
+                teacher_user_id=teacher_user_id,
+                raise_on_exhausted=False,
+            )
+            if pipeline.is_ready_for_save:
+                return pipeline
+        assert pipeline is not None
+        return pipeline
+
     async def _run_stage2_generation(
         self,
         *,
@@ -876,6 +916,7 @@ class Stage2Service:
         persona: str,
         generation_types: list[str],
         teacher_user_id: int,
+        raise_on_exhausted: bool = True,
     ) -> Stage2GenerationPipelineResult:
         return await self.generation_orchestrator.generate(
             document_text=document_context.generation_text,
@@ -886,6 +927,7 @@ class Stage2Service:
             teacher_user_id=teacher_user_id,
             retrieval_input=retrieval_input,
             document_context=document_context,
+            raise_on_exhausted=raise_on_exhausted,
         )
 
     async def _persist_generated_card(

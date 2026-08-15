@@ -140,6 +140,7 @@ class Stage2GenerationOrchestrator:
         teacher_user_id: int | None = None,
         retrieval_input: Stage2RetrievalInput | None = None,
         document_context: Stage2DocumentContext | None = None,
+        raise_on_exhausted: bool = True,
     ) -> Stage2GenerationPipelineResult:
         resolved_retrieval_input = retrieval_input or build_stage2_retrieval_input(
             document_text=document_text,
@@ -148,6 +149,7 @@ class Stage2GenerationOrchestrator:
         max_attempts = settings.STAGE2_GENERATION_MAX_ATTEMPTS
         validation_feedback = ""
         last_failure_codes: tuple[str, ...] = ()
+        last_pipeline: Stage2GenerationPipelineResult | None = None
 
         for attempt in range(1, max_attempts + 1):
             started_at = time.perf_counter()
@@ -209,6 +211,7 @@ class Stage2GenerationOrchestrator:
                 )
                 return pipeline
 
+            last_pipeline = pipeline
             last_failure_codes = pipeline.failure_codes
             will_retry = attempt < max_attempts
             log_stage2_generation_attempt(
@@ -226,9 +229,14 @@ class Stage2GenerationOrchestrator:
                     index_codes=index_application.codes,
                 )
 
-        log_stage2_generation_failed(
-            teacher_user_id=teacher_user_id,
-            generation_attempts=max_attempts,
-            failure_codes=last_failure_codes,
-        )
-        raise Stage2LangflowServiceUnavailableError()
+        if raise_on_exhausted or last_pipeline is None:
+            log_stage2_generation_failed(
+                teacher_user_id=teacher_user_id,
+                generation_attempts=max_attempts,
+                failure_codes=last_failure_codes,
+            )
+            raise Stage2LangflowServiceUnavailableError()
+
+        # 호출자가 실패 코드를 보고 다른 환각 유형으로 재시도하거나
+        # 세트 일부만 실패로 처리할 수 있도록 마지막 결과를 그대로 돌려준다.
+        return last_pipeline
