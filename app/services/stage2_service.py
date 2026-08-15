@@ -9,15 +9,16 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-
+from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
+from app.core.datetime_utils import normalize_assignment_due_at
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage2CreateError,
@@ -154,6 +155,7 @@ class Stage2Service:
         subject: str,
         question: str,
         persona: str,
+        due_at: datetime,
         hallucination_types_raw: str,
         expected_error_count: int,
         file: UploadFile,
@@ -172,6 +174,7 @@ class Stage2Service:
         if len(persona) > 100:
             raise InvalidStage2CreateError()
 
+        due_at = normalize_assignment_due_at(due_at)
         hint_types = self._parse_hallucination_types(hallucination_types_raw)
         if expected_error_count != CARD_EXPECTED_ERROR_COUNT:
             raise InvalidStage2CreateError()
@@ -222,6 +225,7 @@ class Stage2Service:
             document_context=document_context,
             set_id=None,
             publish_status=AssignmentPublishStatus.PUBLISHED.value,
+            due_at=due_at,
         )
 
         log_stage2_generation_succeeded(
@@ -243,6 +247,7 @@ class Stage2Service:
         subject: str,
         question: str,
         persona: str,
+        due_at: datetime,
         hallucination_types_raw: str,
         card_count: int,
         file: UploadFile,
@@ -261,6 +266,7 @@ class Stage2Service:
         if len(persona) > 100:
             raise InvalidStage2CreateError()
 
+        due_at = normalize_assignment_due_at(due_at)
         if not (1 <= card_count <= MAX_SET_CARD_COUNT):
             raise InvalidStage2CreateError()
 
@@ -326,6 +332,7 @@ class Stage2Service:
                 document_context=document_context,
                 set_id=set_id,
                 publish_status=AssignmentPublishStatus.DRAFT.value,
+                due_at=due_at,
             )
 
             if set_id is None:
@@ -487,6 +494,7 @@ class Stage2Service:
             reference_document_text=reference_text,
             question=detail.question or "",
             flawed_ai_response=detail.hallucinated_ai_answer or "",
+            due_at=assignment.due_at,
             expected_error_count=expected_count,
             hallucination_type_options=[
                 HallucinationTypeOption(**item) for item in HALLUCINATION_TYPE_OPTIONS
@@ -958,6 +966,7 @@ class Stage2Service:
         document_context: Stage2DocumentContext,
         set_id: int | None,
         publish_status: str,
+        due_at: datetime,
     ) -> tuple[Assignment, Stage2CreateResponse]:
         langflow_result = pipeline.result
         generated_errors = langflow_result.generated_errors
@@ -971,6 +980,7 @@ class Stage2Service:
                 stage=2,
                 subject=subject,
                 description=question,
+                due_at=due_at,
                 max_attempts=settings.STAGE2_MAX_ATTEMPTS,
                 set_id=set_id,
                 publish_status=publish_status,
@@ -1051,6 +1061,7 @@ class Stage2Service:
             title=title,
             question=question,
             flawed_ai_response=langflow_result.flawed_ai_response,
+            due_at=assignment.due_at,
             expected_error_count=CARD_EXPECTED_ERROR_COUNT,
             generated_errors=response_errors,
         )

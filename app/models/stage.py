@@ -17,6 +17,8 @@ class Stage1AssignmentDetail(Base):
     )
     parameter_guide: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     default_parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 채점용 정답 파라미터(학생 API 미노출). create 시 서버가 자동 탐색해 저장.
+    optimal_parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     question: Mapped[str | None] = mapped_column(Text, nullable=True)
     guideline: Mapped[str | None] = mapped_column(Text, nullable=True)
     persona: Mapped[str | None] = mapped_column(String(100), nullable=True)

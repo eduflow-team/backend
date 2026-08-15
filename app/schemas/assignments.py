@@ -1,10 +1,11 @@
 """Stage 1 과제 API Request/Response 스키마 (Notion flat JSON)."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.core.config import settings
+from app.core.datetime_utils import serialize_utc_z
 
 
 class Stage1Parameters(BaseModel):
@@ -31,6 +32,8 @@ class RagProcessVisualization(BaseModel):
     total_chunks: int
     retrieved_chunks: int
     vector_search_score: float
+    # 학생이 답과 대조할 수 있도록 검색된 청크 본문(순서=유사도 높은 순)
+    retrieved_chunk_previews: list[str] = Field(default_factory=list)
 
 
 class Stage1ChatResponse(BaseModel):
@@ -95,22 +98,32 @@ class Stage1AssignmentDetailResponse(BaseModel):
     assignment_id: int
     question: str
     guideline: str
+    due_at: datetime | None = None
     parameter_explanations: Stage1ParameterExplanations
     default_parameters: Stage1Parameters
     attempts: Stage1AttemptsDetail
     highest_score: int | None = None
     best_parameters: Stage1Parameters | None = None
 
+    @field_serializer("due_at")
+    def serialize_due_at(self, value: datetime | None) -> str | None:
+        return serialize_utc_z(value)
+
 
 class Stage1CreateResponse(BaseModel):
     assignment_id: int
     created_at: datetime | None
+    due_at: datetime | None
+    question: str
+    guideline: str
 
     @field_serializer("created_at")
     def serialize_created_at(self, value: datetime | None) -> str | None:
-        if value is None:
-            return None
-        return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return serialize_utc_z(value)
+
+    @field_serializer("due_at")
+    def serialize_due_at(self, value: datetime | None) -> str | None:
+        return serialize_utc_z(value)
 
 
 PARAMETER_EXPLANATIONS = Stage1ParameterExplanations(

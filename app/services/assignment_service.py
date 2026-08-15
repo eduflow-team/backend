@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
+from app.core.datetime_utils import normalize_assignment_due_at
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage1CreateError,
@@ -101,8 +102,7 @@ class AssignmentService:
         *,
         class_id: int,
         subject: str,
-        question: str,
-        guideline: str,
+        due_at: datetime,
         default_chunk_size: int,
         default_top_k: int,
         default_temperature: float,
@@ -114,12 +114,11 @@ class AssignmentService:
             raise Stage1AccessForbiddenError()
 
         subject = (subject or "").strip()
-        question = (question or "").strip()
-        guideline = (guideline or "").strip()
         filename = (file.filename or "").strip()
-        if not subject or not question or not guideline or not filename:
+        if not subject or not filename:
             raise InvalidStage1CreateError()
 
+        due_at = normalize_assignment_due_at(due_at)
         self._validate_parameters(default_chunk_size, default_top_k, default_temperature)
 
         suffix = Path(filename).suffix.lower()
@@ -133,7 +132,9 @@ class AssignmentService:
             raise Stage1FileTooLargeError()
 
         try:
-            raw_text = extract_text_from_upload(filename, content)
+            raw_text = await asyncio.to_thread(
+                extract_text_from_upload, filename, content
+            )
             preset_chunk_sets = await self._embed_preset_chunk_sets(raw_text)
         except UnsupportedStage1FileTypeError:
             raise
@@ -143,6 +144,13 @@ class AssignmentService:
             logger.exception("stage1 document processing failed")
             raise Stage1DocumentProcessingError() from exc
 
+        guideline = settings.STAGE1_FIXED_GUIDELINE
+        question = await self._generate_student_question(
+            raw_text=raw_text,
+            subject=subject,
+            filename=filename,
+        )
+
         assignment = Assignment(
             teacher_id=teacher.user_id,
             class_id=class_id,
@@ -150,6 +158,7 @@ class AssignmentService:
             stage=1,
             subject=subject,
             description=question,
+            due_at=due_at,
             max_attempts=settings.STAGE1_MAX_ATTEMPTS,
         )
         assignment = await self.assignment_repository.create(assignment)
@@ -159,11 +168,15 @@ class AssignmentService:
             "top_k": default_top_k,
             "temperature": default_temperature,
         }
+        optimal_parameters = await self._find_optimal_parameters(
+            preset_chunk_sets=preset_chunk_sets,
+        )
         detail = Stage1AssignmentDetail(
             assignment_id=assignment.assignment_id,
             question=question,
             guideline=guideline,
             default_parameters=default_parameters,
+            optimal_parameters=optimal_parameters,
             parameter_guide=PARAMETER_EXPLANATIONS.model_dump(),
         )
         await self.stage1_detail_repository.create(detail)
@@ -199,6 +212,9 @@ class AssignmentService:
         return Stage1CreateResponse(
             assignment_id=assignment.assignment_id,
             created_at=assignment.created_at or datetime.now(UTC),
+            due_at=assignment.due_at,
+            question=question,
+            guideline=guideline,
         )
 
     # ------------------------------------------------------------------
@@ -247,6 +263,7 @@ class AssignmentService:
             assignment_id=assignment.assignment_id,
             question=detail.question or "",
             guideline=detail.guideline or "",
+            due_at=assignment.due_at,
             parameter_explanations=PARAMETER_EXPLANATIONS,
             default_parameters=default_params,
             attempts=Stage1AttemptsDetail(
@@ -320,7 +337,7 @@ class AssignmentService:
         self, user_id: int, assignment_id: int, payload: Stage1SubmitRequest
     ) -> Stage1SubmitResponse:
         student = await self._get_authorized_student(user_id)
-        assignment, _detail = await self._get_stage1_assignment_for_student(
+        assignment, detail = await self._get_stage1_assignment_for_student(
             student, assignment_id
         )
         params = payload.final_parameters
@@ -346,11 +363,40 @@ class AssignmentService:
             raise Stage1SubmitLimitExceededError()
 
         documents = await self.document_repository.get_by_assignment_id(assignment_id)
-        source_text = documents[0].raw_text if documents else ""
-        report, current_score = await self._evaluate_response(
+        if not documents or not documents[0].raw_text:
+            raise AssignmentNotFoundError("과제 문서가 아직 준비되지 않았습니다.")
+        document = documents[0]
+
+        # 전체 원문이 아니라 제출 파라미터로 다시 검색한 청크만 품질 채점 기준으로 쓴다.
+        default_params = self._parse_parameters(detail.default_parameters)
+        optimal_params = self._parse_parameters(
+            detail.optimal_parameters or settings.STAGE1_OPTIMAL_FALLBACK
+        )
+        chunk_vectors = await self._load_or_build_chunk_vectors(
+            document,
+            requested_chunk_size=params.chunk_size,
+            default_chunk_size=default_params.chunk_size,
+        )
+        retrieved_context, _visualization = await self._search_context(
+            chunk_vectors,
+            message=payload.student_prompt,
+            top_k=params.top_k,
+        )
+        source_text = (retrieved_context or "").strip() or (document.raw_text or "")[:2000]
+        report, quality_score = await self._evaluate_response(
             selected_ai_response=payload.selected_ai_response,
-            source_text=source_text or "",
+            source_text=source_text,
             question=assignment.description or "",
+        )
+        distance = self._parameter_distance(
+            baseline=optimal_params,
+            submitted=params,
+        )
+        proximity_score = int(round(100 * (1.0 - distance)))
+        proximity_score = max(0, min(100, proximity_score))
+        current_score = self._blend_proximity_and_quality(
+            proximity_score=proximity_score,
+            quality_score=quality_score,
         )
 
         # records 대표 제출: 이전 final 해제 후 이번 제출만 is_final=True
@@ -390,6 +436,11 @@ class AssignmentService:
             evaluation_metadata={
                 "faithfulness_score": report.faithfulness_score,
                 "relevance_score": report.relevance_score,
+                "quality_score": quality_score,
+                "proximity_score": proximity_score,
+                "parameter_distance_to_optimal": round(distance, 4),
+                "proximity_weight": settings.STAGE1_PROXIMITY_WEIGHT,
+                "quality_weight": settings.STAGE1_QUALITY_WEIGHT,
             },
         )
         await self.evaluation_repository.create(evaluation)
@@ -480,22 +531,24 @@ class AssignmentService:
     async def _embed_preset_chunk_sets(
         self, raw_text: str
     ) -> list[tuple[int, list[tuple[str, list[float]]]]]:
-        """preset chunk_size마다 청킹 후 임베딩을 병렬 수행한다."""
+        """preset chunk_size마다 청킹 후 임베딩한다. 동시성은 최대 2로 제한."""
 
         presets = settings.STAGE1_CHUNK_SIZE_PRESETS
+        sem = asyncio.Semaphore(2)
 
         async def _one(size: int) -> tuple[int, list[tuple[str, list[float]]]]:
-            chunks = split_text_into_chunks(raw_text, size)
-            if not chunks:
-                raise Stage1DocumentProcessingError()
-            embeddings = await embed_texts(chunks)
-            return size, list(zip(chunks, embeddings, strict=True))
+            async with sem:
+                chunks = split_text_into_chunks(raw_text, size)
+                if not chunks:
+                    raise Stage1DocumentProcessingError()
+                embeddings = await embed_texts(chunks)
+                return size, list(zip(chunks, embeddings, strict=True))
 
         return list(await asyncio.gather(*[_one(size) for size in presets]))
 
     def _parse_parameters(self, raw: dict | None) -> Stage1Parameters:
         if not raw:
-            return Stage1Parameters(chunk_size=200, top_k=2, temperature=0.9)
+            return Stage1Parameters(chunk_size=50, top_k=2, temperature=1.0)
         try:
             return Stage1Parameters(
                 chunk_size=int(raw["chunk_size"]),
@@ -617,12 +670,14 @@ class AssignmentService:
         ranked.sort(key=lambda item: item[0], reverse=True)
 
         selected = ranked[:top_k]
-        context = "\n\n".join(text for _, text in selected)
+        previews = [text.strip() for _, text in selected if text.strip()]
+        context = "\n\n".join(previews)
         best_score = selected[0][0] if selected else 0.0
         visualization = RagProcessVisualization(
             total_chunks=len(chunk_vectors),
             retrieved_chunks=len(selected),
             vector_search_score=round(best_score, 4),
+            retrieved_chunk_previews=previews,
         )
         return context, visualization
 
@@ -663,6 +718,13 @@ class AssignmentService:
     def _score_against_source(
         self, *, selected_ai_response: str, source_text: str
     ) -> tuple[int, int, int, str]:
+        """원문(제출 시 검색 청크) 토큰 겹침 채점.
+
+        - support = (답변∩기준텍스트) / 답변 토큰 수
+        - 기준텍스트는 전체 교재가 아니라 제출 파라미터로 검색한 청크
+        - 답변 토큰의 약 55%가 기준에 있으면 100점 근접
+        """
+
         response_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", selected_ai_response))
         source_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", source_text))
         if not response_tokens:
@@ -674,33 +736,324 @@ class AssignmentService:
             )
 
         overlap = response_tokens & source_tokens
-        overlap_ratio = len(overlap) / max(len(response_tokens), 1)
-        coverage = len(overlap) / max(len(source_tokens), 1) if source_tokens else 0.0
+        support = len(overlap) / max(len(response_tokens), 1)
 
-        faithfulness = max(1, min(5, round(overlap_ratio * 5)))
-        relevance = max(
-            1,
-            min(5, round((0.6 * overlap_ratio + 0.4 * min(1.0, coverage * 20)) * 5)),
-        )
-        current_score = int(round(((faithfulness + relevance) / 10) * 100))
+        # 55% support ≈ 100점 (의역 여유). 검색 청크가 짧으면 환각 답은 자연히 낮아짐.
+        full_marks_at = 0.55
+        normalized = min(1.0, support / full_marks_at) if full_marks_at else 0.0
+        current_score = int(round(100 * normalized))
+        current_score = max(0, min(100, current_score))
+
+        # API 리포트용 1~5 (동일 스케일에서 환산)
+        faithfulness = max(1, min(5, int(round(normalized * 5)) or 1))
+        relevance = faithfulness
 
         if faithfulness <= 2:
             feedback = (
-                "질문에서 요구한 핵심 내용은 일부 포함되었으나, 원본 교재에 없는 내용이 섞여 있을 수 "
-                "있습니다. AI가 주어진 문서에만 집중하게 만들려면 temperature를 낮추거나 top_k를 "
-                "조절해 보세요."
+                "답변에 학습 자료에서 확인하기 어려운 내용이 섞여 있는 것 같습니다. "
+                "자료에 더 잘 맞는 답을 얻으려면 검색·생성 설정을 다시 살펴보세요."
             )
         elif faithfulness >= 4:
             feedback = (
-                "검색된 자료와의 일치도가 높고 관련 정보도 잘 담겼습니다. "
-                "지금의 파라미터 조합을 기억해 두면 도움이 됩니다."
+                "답변이 주어진 자료와 잘 맞아 보입니다. "
+                "어떤 설정에서 이런 결과가 나왔는지 스스로 정리해 두면 좋습니다."
             )
         else:
             feedback = (
-                "핵심 내용은 대체로 맞지만 일부 표현이 자료와 어긋날 수 있습니다. "
-                "chunk_size·top_k·temperature를 바꿔 보며 원문에 더 가까운 답을 찾아보세요."
+                "핵심은 대체로 닿아 있지만, 자료와 어긋나거나 애매한 표현이 일부 있습니다. "
+                "설정을 바꿔 가며 자료에 더 가까운 답을 비교해 보세요."
             )
         return faithfulness, relevance, current_score, feedback
+
+    def _parameter_distance(
+        self,
+        *,
+        baseline: Stage1Parameters,
+        submitted: Stage1Parameters,
+    ) -> float:
+        """두 파라미터 세트의 정규화 거리 (0~1).
+
+        chunk_size·top_k 비중을 크게, temperature는 작게 반영한다.
+        """
+
+        presets = list(settings.STAGE1_CHUNK_SIZE_PRESETS)
+
+        def _chunk_index(size: int) -> int:
+            if size in presets:
+                return presets.index(size)
+            return min(range(len(presets)), key=lambda i: abs(presets[i] - size))
+
+        chunk_span = max(len(presets) - 1, 1)
+        chunk_m = abs(_chunk_index(submitted.chunk_size) - _chunk_index(baseline.chunk_size)) / chunk_span
+        topk_m = min(1.0, abs(submitted.top_k - baseline.top_k) / 9.0)
+        temp_m = min(1.0, abs(float(submitted.temperature) - float(baseline.temperature)))
+        distance = 0.45 * chunk_m + 0.40 * topk_m + 0.15 * temp_m
+        return max(0.0, min(1.0, distance))
+
+    def _blend_proximity_and_quality(
+        self, *, proximity_score: int, quality_score: int
+    ) -> int:
+        """최종 = 0.8×optimal근접 + 0.2×답변품질."""
+
+        w_p = float(settings.STAGE1_PROXIMITY_WEIGHT)
+        w_q = float(settings.STAGE1_QUALITY_WEIGHT)
+        final = w_p * proximity_score + w_q * quality_score
+        return max(0, min(100, int(round(final))))
+
+    async def _find_optimal_parameters(
+        self,
+        *,
+        preset_chunk_sets: list[tuple[int, list[tuple[str, list[float]]]]],
+    ) -> dict:
+        """자료에 맞는 최적 파라미터를 신중히 고른다.
+
+        목표: 답변(검색) 품질이 최고에 가까운 설정 중, 가장 약한(최소) 파라미터.
+
+        1) 고정 질문으로 chunk_size × top_k 그리드 검색 품질 측정
+        2) 최고 품질의 elbow 비율 이상인 후보만 남김
+        3) 그중 chunk/top_k가 가장 약한 조합 선택
+        4) 해당 조합으로 temperature 후보를 평가해, 고품질 대역에서 가장 낮은 temp 선택
+           (Langflow 불가 시 검색 품질만으로 temp는 낮은 값 우선)
+        """
+
+        fallback = dict(settings.STAGE1_OPTIMAL_FALLBACK)
+        question = settings.STAGE1_FIXED_CHAT_MESSAGE
+        elbow = float(settings.STAGE1_OPTIMAL_ELBOW_RATIO)
+        top_k_candidates = tuple(settings.STAGE1_OPTIMAL_TOP_K_CANDIDATES)
+        temp_candidates = tuple(settings.STAGE1_OPTIMAL_TEMP_CANDIDATES)
+        presets = list(settings.STAGE1_CHUNK_SIZE_PRESETS)
+
+        try:
+            query_embedding = await embed_text(question)
+        except Exception:  # noqa: BLE001
+            logger.exception("stage1 optimal: query embed failed, using fallback")
+            return fallback
+
+        retrieval_rows: list[dict] = []
+        for chunk_size, pairs in preset_chunk_sets:
+            if not pairs:
+                continue
+            ranked: list[tuple[float, str]] = []
+            for text, emb in pairs:
+                ranked.append((cosine_similarity(query_embedding, emb), text))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+
+            for top_k in top_k_candidates:
+                selected = ranked[:top_k]
+                if not selected:
+                    continue
+                mean_sim = sum(score for score, _ in selected) / len(selected)
+                context = "\n\n".join(text.strip() for _, text in selected if text.strip())
+                # 검색 품질: 평균 유사도 + 질문 토큰이 검색 결과에 얼마나 있는지
+                q_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", question))
+                c_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", context))
+                cover = (len(q_tokens & c_tokens) / max(len(q_tokens), 1)) if q_tokens else 0.0
+                quality = 100.0 * (0.7 * min(1.0, max(0.0, mean_sim)) + 0.3 * cover)
+                retrieval_rows.append(
+                    {
+                        "chunk_size": chunk_size,
+                        "top_k": top_k,
+                        "quality": quality,
+                        "context": context,
+                        "mean_sim": mean_sim,
+                    }
+                )
+
+        if not retrieval_rows:
+            logger.warning("stage1 optimal: no retrieval candidates, using fallback")
+            return fallback
+
+        max_quality = max(row["quality"] for row in retrieval_rows)
+        if max_quality <= 0:
+            return fallback
+
+        pool = [row for row in retrieval_rows if row["quality"] >= elbow * max_quality]
+        if not pool:
+            pool = [max(retrieval_rows, key=lambda row: row["quality"])]
+
+        def _chunk_index(size: int) -> int:
+            if size in presets:
+                return presets.index(size)
+            return min(range(len(presets)), key=lambda i: abs(presets[i] - size))
+
+        # 고품질 대역에서 가장 약한 chunk/top_k (최소 설정)
+        best_retrieval = min(
+            pool,
+            key=lambda row: (_chunk_index(row["chunk_size"]), row["top_k"], -row["quality"]),
+        )
+        best_chunk = int(best_retrieval["chunk_size"])
+        best_top_k = int(best_retrieval["top_k"])
+        context = best_retrieval["context"]
+
+        # temperature: 가능하면 실제 생성 품질로 고르고, 아니면 낮은 temp 우선
+        best_temp = await self._select_optimal_temperature(
+            context=context,
+            question=question,
+            temp_candidates=temp_candidates,
+            retrieval_quality=float(best_retrieval["quality"]),
+        )
+
+        optimal = {
+            "chunk_size": best_chunk,
+            "top_k": best_top_k,
+            "temperature": best_temp,
+        }
+        logger.info(
+            "stage1 optimal selected: %s (retrieval_max=%.2f, elbow=%.2f, pool=%d)",
+            optimal,
+            max_quality,
+            elbow,
+            len(pool),
+        )
+        return optimal
+
+    async def _select_optimal_temperature(
+        self,
+        *,
+        context: str,
+        question: str,
+        temp_candidates: tuple[float, ...],
+        retrieval_quality: float,
+    ) -> float:
+        """고품질 답 구간에서 가장 낮은 temperature를 고른다."""
+
+        if not context.strip():
+            return float(settings.STAGE1_OPTIMAL_FALLBACK["temperature"])
+
+        # Langflow 미설정이면 생성 없이 낮은 temp(교재 충실) 선택
+        if not (
+            settings.LANGFLOW_API_KEY
+            and settings.LANGFLOW_STAGE1_CHAT_FLOW_ID
+            and settings.LANGFLOW_STAGE1_PROMPT_NODE_ID
+            and settings.LANGFLOW_STAGE1_MODEL_NODE_ID
+        ):
+            return min(temp_candidates)
+
+        scored: list[tuple[float, float]] = []
+        for temp in temp_candidates:
+            try:
+                ai_response = await self.langflow_client.run_stage1_chat(
+                    message=question,
+                    context=context,
+                    temperature=float(temp),
+                )
+                _f, _r, quality, _fb = self._score_against_source(
+                    selected_ai_response=ai_response or "",
+                    source_text=context,
+                )
+                scored.append((float(temp), float(quality)))
+            except Exception:  # noqa: BLE001
+                logger.exception("stage1 optimal: temp=%.2f generation failed", temp)
+
+        if not scored:
+            return min(temp_candidates)
+
+        max_q = max(quality for _, quality in scored)
+        elbow = float(settings.STAGE1_OPTIMAL_ELBOW_RATIO)
+        # 생성 품질이 전부 너무 낮으면 검색 품질만으로 낮은 temp
+        if max_q < 20 and retrieval_quality > 0:
+            return min(temp_candidates)
+
+        pool = [(temp, quality) for temp, quality in scored if quality >= elbow * max_q]
+        if not pool:
+            pool = [max(scored, key=lambda item: item[1])]
+
+        # 고품질 중 가장 낮은 temperature (= 최소 설정으로 좋은 답)
+        return min(pool, key=lambda item: (item[0], -item[1]))[0]
+
+    # 하위 호환: 예전 이름 유지가 필요하면 distance로 위임
+    def _parameter_movement(
+        self,
+        *,
+        baseline: Stage1Parameters,
+        submitted: Stage1Parameters,
+    ) -> float:
+        return self._parameter_distance(baseline=baseline, submitted=submitted)
+
+    def _apply_movement_to_score(self, quality_score: int, movement: float) -> int:
+        """deprecated: proximity 블렌드로 대체. 테스트 호환용."""
+
+        proximity = int(round(100 * (1.0 - movement)))
+        return self._blend_proximity_and_quality(
+            proximity_score=proximity,
+            quality_score=quality_score,
+        )
+
+    async def _generate_student_question(
+        self,
+        *,
+        raw_text: str,
+        subject: str,
+        filename: str,
+    ) -> str:
+        """업로드 문서에서 학생이 볼 '문제(미션)' 문장을 생성한다."""
+        fallback = settings.STAGE1_QUESTION_FALLBACK
+        if not settings.OPENAI_API_KEY:
+            return fallback
+
+        preview = (raw_text or "").strip()[:2500]
+        if not preview:
+            return fallback
+
+        prompt = (
+            "중·고등학생 AI 리터러시 수업용 1단계 과제입니다.\n"
+            "학생이 AI에게 질문하고 chunk_size·top_k·temperature를 조절해 "
+            "업로드 자료에 맞는 답을 찾는 활동입니다.\n"
+            "아래 학습 자료 일부를 읽고, 학생 화면에 보여줄 '문제(미션)'를 "
+            "한국어 1~2문장으로 작성하세요.\n"
+            "규칙:\n"
+            "- 학생이 AI 채팅창에 그대로 칠 '채팅 질문'을 쓰지 마세요.\n"
+            "- '~에 대해 AI에게 질문하고, 파라미터를 조절하여 … 찾아보세요' 형태의 미션으로 쓰세요.\n"
+            "- 자료의 학습 주제(단원·핵심 개념)를 자연스럽게 넣으세요.\n"
+            "- 따옴표·번호·제목 없이 문장만 출력하세요.\n\n"
+            f"교과 코드: {subject}\n"
+            f"파일명: {filename}\n"
+            f"자료 일부:\n{preview}\n"
+        )
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.OPENAI_CHAT_MODEL,
+                        "temperature": 0.4,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "당신은 교사 보조 AI입니다. "
+                                    "학생용 과제 미션 문장만 간결하게 출력하세요."
+                                ),
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+                .strip('"')
+                .strip("'")
+            )
+            if not content:
+                return fallback
+            # 한 줄로 정리
+            content = re.sub(r"\s+", " ", content)
+            return content[:400]
+        except Exception:  # noqa: BLE001
+            logger.exception("stage1 student question generation failed; using fallback")
+            return fallback
 
     async def _generate_ai_feedback(
         self,
@@ -719,13 +1072,17 @@ class AssignmentService:
         answer_preview = (selected_ai_response or "")[:1200]
         prompt = (
             "당신은 AI 리터러시 교육용 채점 조교입니다. "
-            "학생이 파라미터(chunk_size, top_k, temperature)를 조절해 문서 기반 답을 찾는 과제입니다.\n"
-            "아래 점수(1~5)와 원문·답변을 보고, 학생이 다음에 무엇을 바꿀지 한국어로 2~3문장 피드백하세요. "
-            "숫자 점수만 반복하지 말고, temperature/top_k/chunk_size 중 조절 힌트를 포함하세요.\n\n"
+            "학생이 설정을 바꿔 가며 문서 기반 답을 찾는 과제입니다.\n"
+            "아래 점수(1~5)와 참고 자료·답변을 보고, 한국어로 2~3문장 피드백하세요.\n"
+            "규칙:\n"
+            "- 답변이 자료와 얼마나 맞는지, 어떤 점이 아쉬운지만 간접적으로 말해 주세요.\n"
+            "- chunk_size, top_k, temperature 등 파라미터 이름을 쓰지 마세요.\n"
+            "- '높여라/낮춰라/늘려라/줄여라'처럼 구체적 조절 지시를 하지 마세요.\n"
+            "- 숫자 점수만 반복하지 마세요.\n\n"
             f"질문: {question or '(없음)'}\n"
             f"faithfulness(원문 충실): {faithfulness}/5\n"
             f"relevance(관련성): {relevance}/5\n"
-            f"원문 일부:\n{source_preview}\n\n"
+            f"참고 자료 일부:\n{source_preview}\n\n"
             f"학생 선택 답변:\n{answer_preview}\n"
         )
 
@@ -745,7 +1102,10 @@ class AssignmentService:
                         "messages": [
                             {
                                 "role": "system",
-                                "content": "한국어로 짧고 친절한 학습 피드백만 출력하세요.",
+                                "content": (
+                                    "한국어로 짧고 친절한 학습 피드백만 출력하세요. "
+                                    "파라미터 이름이나 높임/낮춤 지시는 하지 마세요."
+                                ),
                             },
                             {"role": "user", "content": prompt},
                         ],

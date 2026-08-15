@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -25,6 +26,7 @@ from app.services.stage2_service import Stage2Service
 
 DOCUMENT_TEXT = "장영실은 자격루와 측우기를 발명했습니다."
 HALLUCINATION_TYPES_RAW = '["PERSONA_BIAS", "INFORMATION_FABRICATION"]'
+FUTURE_DUE_AT = datetime.now(UTC) + timedelta(days=7)
 
 
 def _ready_pipeline() -> Stage2GenerationPipelineResult:
@@ -127,6 +129,7 @@ async def test_create_set_returns_cards_with_shared_set_id(tmp_path: Path) -> No
             subject="과학",
             question="장영실의 업적은?",
             persona="페르소나",
+            due_at=FUTURE_DUE_AT,
             hallucination_types_raw=HALLUCINATION_TYPES_RAW,
             card_count=2,
             file=_upload_file(),
@@ -184,6 +187,7 @@ async def test_create_set_raises_when_all_cards_fail() -> None:
                 subject="과학",
                 question="질문",
                 persona="페르소나",
+                due_at=FUTURE_DUE_AT,
                 hallucination_types_raw=HALLUCINATION_TYPES_RAW,
                 card_count=2,
                 file=_upload_file(),

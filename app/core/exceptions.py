@@ -211,6 +211,13 @@ class InvalidStage1CreateError(DomainException):
     default_message = "필수 파라미터(문서 파일, 질문 등)가 누락되었습니다."
 
 
+class InvalidAssignmentDueAtError(DomainException):
+    """과제 마감일이 없거나 과거 시각일 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "마감일은 현재 시각 이후여야 합니다."
+
+
 class UnsupportedStage1FileTypeError(DomainException):
     """지원하지 않는 문서 형식으로 1단계 과제를 생성할 때 발생 (415)."""
 

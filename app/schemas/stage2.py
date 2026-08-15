@@ -1,6 +1,10 @@
 """Stage 2 과제 API Request/Response 스키마 (Notion flat JSON)."""
 
-from pydantic import BaseModel, Field, field_validator
+from datetime import datetime
+
+from pydantic import BaseModel, Field, field_serializer, field_validator
+
+from app.core.datetime_utils import serialize_utc_z
 
 
 ALLOWED_HALLUCINATION_TYPES = frozenset(
@@ -46,6 +50,7 @@ class Stage2AssignmentDetailResponse(BaseModel):
     reference_document_text: str
     question: str
     flawed_ai_response: str
+    due_at: datetime | None = None
     expected_error_count: int
     hallucination_type_options: list[HallucinationTypeOption]
     hallucination_type_hints: list[str]
@@ -54,6 +59,10 @@ class Stage2AssignmentDetailResponse(BaseModel):
     remaining_errors_to_find: int
     attempts: Stage2AttemptsDetail
     cleared_highlights: list[str]
+
+    @field_serializer("due_at")
+    def serialize_due_at(self, value: datetime | None) -> str | None:
+        return serialize_utc_z(value)
 
 
 class Stage2GeneratedErrorItem(BaseModel):
@@ -72,8 +81,13 @@ class Stage2CreateResponse(BaseModel):
     title: str
     question: str
     flawed_ai_response: str
+    due_at: datetime | None
     expected_error_count: int
     generated_errors: list[Stage2GeneratedErrorItem]
+
+    @field_serializer("due_at")
+    def serialize_due_at(self, value: datetime | None) -> str | None:
+        return serialize_utc_z(value)
 
 
 class Stage2SetCardFailure(BaseModel):
