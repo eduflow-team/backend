@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from app.services.stage2_chunk_candidates import build_stage2_chunk_candidates
+from app.services.stage2_chunk_candidates import (
+    build_stage2_chunk_candidates,
+    build_stage2_student_excerpt,
+)
 
 BASELINE_DOCUMENT = (
     "장영실은 세종 대에 자격루와 측우기를 발명한 조선시대 최고의 과학자입니다.\n"
@@ -155,3 +158,92 @@ def test_total_char_limit_applies_to_first_candidate() -> None:
         max_total_chars=10,
     )
     assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# 학생 화면 발췌문
+# ---------------------------------------------------------------------------
+
+EVIDENCE = "자격루는 물의 흐름을 이용해 시간을 알리는 자동 물시계입니다."
+
+
+def _long_document(evidence: str) -> str:
+    filler = [
+        f"조선시대 생활 문화에 대한 배경 설명 문단 {index}입니다. "
+        f"내용은 서로 다르며 충분히 긴 문장으로 구성되어 있습니다."
+        for index in range(40)
+    ]
+    filler.insert(20, evidence)
+    return " ".join(filler)
+
+
+def test_student_excerpt_respects_char_budget() -> None:
+    excerpt = build_stage2_student_excerpt(
+        document_text=_long_document(EVIDENCE),
+        question=BASELINE_QUESTION,
+        evidence_sentences=[EVIDENCE],
+        max_chars=600,
+    )
+
+    assert excerpt
+    assert len(excerpt) <= 600
+
+
+def test_student_excerpt_keeps_evidence_sentence() -> None:
+    excerpt = build_stage2_student_excerpt(
+        document_text=_long_document(EVIDENCE),
+        question=BASELINE_QUESTION,
+        evidence_sentences=[EVIDENCE],
+        max_chars=600,
+    )
+
+    assert EVIDENCE in excerpt
+
+
+def test_student_excerpt_rejoins_pdf_line_breaks() -> None:
+    """추출 텍스트가 줄마다 끊겨 있어도 문장 단위로 다시 이어 붙인다."""
+    broken = "자격루는 물의 흐름을 이용해\n\n시간을 알리는\n\n자동 물시계입니다."
+    excerpt = build_stage2_student_excerpt(
+        document_text=broken,
+        question=BASELINE_QUESTION,
+        evidence_sentences=[EVIDENCE],
+        max_chars=600,
+    )
+
+    assert EVIDENCE in excerpt
+
+
+def test_student_excerpt_falls_back_to_relevance_without_evidence() -> None:
+    excerpt = build_stage2_student_excerpt(
+        document_text=BASELINE_DOCUMENT,
+        question=BASELINE_QUESTION,
+        evidence_sentences=[],
+        max_chars=600,
+    )
+
+    assert "장영실" in excerpt
+
+
+def test_student_excerpt_marks_gap_between_distant_units() -> None:
+    excerpt = build_stage2_student_excerpt(
+        document_text=_long_document(EVIDENCE),
+        question="전혀 관련 없는 질문",
+        evidence_sentences=[EVIDENCE],
+        max_chars=300,
+        chunk_size=120,
+    )
+
+    assert EVIDENCE in excerpt
+    assert len(excerpt) <= 300
+
+
+def test_student_excerpt_empty_document_returns_empty() -> None:
+    assert (
+        build_stage2_student_excerpt(
+            document_text="   ",
+            question=BASELINE_QUESTION,
+            evidence_sentences=[EVIDENCE],
+            max_chars=600,
+        )
+        == ""
+    )

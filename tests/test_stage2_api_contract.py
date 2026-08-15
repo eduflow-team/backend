@@ -421,6 +421,9 @@ async def test_get_detail_response_matches_external_contract() -> None:
         )
     )
     service.highlight_repository.list_by_user_and_assignment = AsyncMock(return_value=[])
+    service.stage2_error_answer_repository.list_by_assignment_id = AsyncMock(
+        return_value=[_error_answer()]
+    )
 
     response = await service.get_step2_assignment(10, 42)
     parsed = Stage2AssignmentDetailResponse.model_validate(response.model_dump())

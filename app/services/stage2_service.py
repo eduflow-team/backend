@@ -93,6 +93,7 @@ from app.services.stage2_document_context import (
     Stage2DocumentContext,
     resolve_stage2_document_context,
 )
+from app.services.stage2_chunk_candidates import build_stage2_student_excerpt
 from app.services.stage2_retrieval_input import build_stage2_retrieval_input_from_candidates
 from app.services.stage2_generation_logging import (
     log_stage2_generation_failed,
@@ -114,6 +115,7 @@ _DOCUMENT_MEDIA_TYPES = {
 }
 
 CARD_EXPECTED_ERROR_COUNT = 1
+MAX_SET_CARD_COUNT = 3
 
 
 @dataclass(frozen=True)
@@ -259,7 +261,7 @@ class Stage2Service:
         if len(persona) > 100:
             raise InvalidStage2CreateError()
 
-        if not (1 <= card_count <= 5):
+        if not (1 <= card_count <= MAX_SET_CARD_COUNT):
             raise InvalidStage2CreateError()
 
         hint_types = self._parse_hallucination_types(hallucination_types_raw)
@@ -429,7 +431,19 @@ class Stage2Service:
         )
 
         document = await self.document_repository.get_by_id(detail.document_id)
-        reference_text = document.raw_text if document and document.raw_text else ""
+        source_text = document.raw_text if document and document.raw_text else ""
+        error_answers = await self.stage2_error_answer_repository.list_by_assignment_id(
+            assignment_id
+        )
+        # 학생에게는 원문 전체가 아니라 근거 주변 발췌만 보여준다 (전체는 PDF 뷰어로)
+        reference_text = build_stage2_student_excerpt(
+            document_text=source_text,
+            question=detail.question or "",
+            evidence_sentences=[
+                answer.evidence_sentence or "" for answer in error_answers
+            ],
+            max_chars=settings.STAGE2_STUDENT_EXCERPT_MAX_CHARS,
+        )
         reference_filename = (document.filename if document and document.filename else "") or ""
         reference_url = (
             self._step2_document_url(assignment.assignment_id)

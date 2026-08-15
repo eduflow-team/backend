@@ -10,6 +10,10 @@ from app.services.embedding_service import split_text_into_chunks
 from app.services.grading.highlight_grader import _normalize, _overlap_score
 
 
+_EVIDENCE_MATCH_HEAD_CHARS = 24
+_EVIDENCE_MATCH_MIN_HEAD_CHARS = 8
+
+
 @dataclass(frozen=True)
 class Stage2ChunkCandidate:
     chunk_id: str
@@ -283,6 +287,210 @@ def build_stage2_reference_excerpt(
         if window:
             return window
     return excerpt
+
+
+def build_stage2_student_excerpt(
+    *,
+    document_text: str,
+    question: str,
+    evidence_sentences: list[str],
+    max_chars: int,
+    chunk_size: int | None = None,
+    min_chunk_chars: int | None = None,
+) -> str:
+    """학생 화면에 보여줄 발췌문을 만든다.
+
+    정답 근거 문장이 든 단락을 먼저 확보하고 남은 예산은 근거 주변 문맥으로 채운다.
+    근거를 찾지 못하면 질문 relevance 기준 발췌문으로 되돌아간다.
+    """
+    if max_chars <= 0:
+        return ""
+
+    resolved_chunk_size = (
+        settings.STAGE2_CHUNK_SIZE if chunk_size is None else chunk_size
+    )
+    resolved_min_chars = (
+        settings.STAGE2_MIN_CHUNK_CHARS if min_chunk_chars is None else min_chunk_chars
+    )
+
+    units = _split_student_excerpt_units(
+        document_text,
+        chunk_size=resolved_chunk_size,
+        min_chunk_chars=resolved_min_chars,
+    )
+    if not units:
+        return ""
+
+    evidence_indexes = _locate_evidence_units(units, evidence_sentences)
+    if not evidence_indexes:
+        return build_stage2_reference_excerpt(
+            document_text=document_text,
+            question=question,
+            max_chars=max_chars,
+            chunk_size=resolved_chunk_size,
+            min_chunk_chars=resolved_min_chars,
+        )
+
+    selected: dict[int, str] = {}
+    total_chars = 0
+    for index in evidence_indexes:
+        text = units[index].strip()
+        if not text:
+            continue
+        separator_len = 2 if selected else 0
+        if total_chars + separator_len + len(text) > max_chars:
+            text = _trim_around_evidence(
+                text,
+                evidence_sentences,
+                max_chars - total_chars - separator_len,
+            )
+            if not text:
+                continue
+        selected[index] = text
+        total_chars += separator_len + len(text)
+
+    if not selected:
+        head = units[evidence_indexes[0]].strip()
+        return (
+            _trim_around_evidence(head, evidence_sentences, max_chars)
+            or head[:max_chars].rstrip()
+        )
+
+    # 짧은 질문 대비 relevance 점수는 노이즈가 커서 근거 주변 문맥을 먼저 채운다
+    normalized_question = _normalize(question)
+    evidence_anchors = list(selected)
+    context_order = sorted(
+        (index for index in range(len(units)) if index not in selected),
+        key=lambda index: (
+            min(abs(index - anchor) for anchor in evidence_anchors),
+            -_score_chunk_relevance(normalized_question, units[index]),
+            index,
+        ),
+    )
+    for index in context_order:
+        text = units[index].strip()
+        if not text or total_chars + 2 + len(text) > max_chars:
+            continue
+        selected[index] = text
+        total_chars += 2 + len(text)
+
+    return _join_excerpt_units(selected)
+
+
+def _split_student_excerpt_units(
+    document_text: str,
+    *,
+    chunk_size: int,
+    min_chunk_chars: int,
+) -> list[str]:
+    """PDF 줄바꿈 노이즈를 걷어내고 문장을 이어 붙여 읽을 수 있는 단락 단위로 만든다.
+
+    추출 텍스트는 한 줄마다 빈 줄이 끼어 있어 단락 기준으로 자르면
+    "니다.", "개념 체크" 같은 조각만 남는다. 그래서 공백을 먼저 평탄화한다.
+    """
+    flattened = _flatten(document_text)
+    if not flattened:
+        return []
+
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?。！？])\s+", flattened)
+        if sentence.strip()
+    ]
+    if not sentences:
+        return []
+
+    units: list[str] = []
+    current = ""
+    for sentence in sentences:
+        candidate = f"{current} {sentence}".strip() if current else sentence
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+        if current:
+            units.append(current)
+        current = sentence
+    if current:
+        units.append(current)
+
+    return _merge_short_chunks(units, min_chunk_chars=min_chunk_chars)
+
+
+def _locate_evidence_units(
+    units: list[str],
+    evidence_sentences: list[str],
+) -> list[int]:
+    """근거 문장이 들어 있는 단락 인덱스를 찾는다."""
+    normalized_units = [_normalize(unit) for unit in units]
+    found: list[int] = []
+    for sentence in evidence_sentences:
+        normalized = _normalize(sentence)
+        if not normalized:
+            continue
+
+        match = next(
+            (
+                index
+                for index, unit in enumerate(normalized_units)
+                if unit and normalized in unit
+            ),
+            None,
+        )
+        if match is None:
+            # 근거가 단락 경계에 걸치면 앞부분만으로 다시 찾는다
+            head = normalized[:_EVIDENCE_MATCH_HEAD_CHARS]
+            if len(head) >= _EVIDENCE_MATCH_MIN_HEAD_CHARS:
+                match = next(
+                    (
+                        index
+                        for index, unit in enumerate(normalized_units)
+                        if unit and head in unit
+                    ),
+                    None,
+                )
+        if match is not None and match not in found:
+            found.append(match)
+    return found
+
+
+def _flatten(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").replace("\r", "\n")).strip()
+
+
+def _trim_around_evidence(
+    text: str,
+    evidence_sentences: list[str],
+    budget: int,
+) -> str:
+    """단락이 예산을 넘으면 근거 문장을 가운데 두고 잘라낸다."""
+    if budget <= 0:
+        return ""
+    if len(text) <= budget:
+        return text
+
+    for sentence in evidence_sentences:
+        stripped = _flatten(sentence)
+        if not stripped:
+            continue
+        position = text.find(stripped)
+        if position < 0:
+            continue
+        lead = max(0, (budget - len(stripped)) // 2)
+        start = max(0, position - lead)
+        return text[start : start + budget].strip()
+    return text[:budget].rstrip()
+
+
+def _join_excerpt_units(units_by_index: dict[int, str]) -> str:
+    """떨어진 단락을 이어 붙일 때 생략 표시를 넣어 연속된 원문처럼 보이지 않게 한다."""
+    parts: list[str] = []
+    previous: int | None = None
+    for index in sorted(units_by_index):
+        if previous is not None and index - previous > 1:
+            parts.append("(…)")
+        parts.append(units_by_index[index])
+        previous = index
+    return "\n\n".join(parts).strip()
 
 
 def _keyword_window_excerpt(

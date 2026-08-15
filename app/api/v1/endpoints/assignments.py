@@ -286,7 +286,7 @@ async def create_step2_set(
         ...,
         description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
     ),
-    card_count: int = Form(..., ge=1, le=5),
+    card_count: int = Form(..., ge=1, le=3),
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
