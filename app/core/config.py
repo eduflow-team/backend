@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080
 
-    # OpenAI (문서 임베딩·질의 임베딩·채점 피드백용)
+    # OpenAI (문서 임베딩·질의 임베딩·Stage2 G-Eval 채점)
     OPENAI_API_KEY: str = ""
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_EMBEDDING_DIMENSIONS: int = 768
@@ -71,9 +71,17 @@ class Settings(BaseSettings):
     # Stage 2
     STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
     STAGE2_MAX_ATTEMPTS: int = 5
+    STAGE2_GENERATION_MAX_ATTEMPTS: int = 3
+    STAGE2_FLOW_VERSION: str = "stage2-v2"
     STAGE2_LOCATION_THRESHOLD: float = 0.8
     STAGE2_REASONING_THRESHOLD: float = 0.95
     STAGE2_CORRECTION_MIN_SCORE: int = 4
+    STAGE2_CHUNK_SIZE: int = 400
+    STAGE2_MIN_CHUNK_CHARS: int = 30
+    STAGE2_MAX_CHUNK_CANDIDATES: int = 5
+    STAGE2_MAX_CANDIDATE_TOTAL_CHARS: int = 4000
+    STAGE2_GENERATION_DOCUMENT_MAX_CHARS: int = 6000
+    STAGE2_STUDENT_EXCERPT_MAX_CHARS: int = 1200
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

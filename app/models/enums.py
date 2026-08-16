@@ -23,3 +23,10 @@ class ProgressStatus(str, Enum):
     NOT_STARTED = "NOT_STARTED"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
+
+
+class AssignmentPublishStatus(str, Enum):
+    """`assignments.publish_status`에 저장되는 값."""
+
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
