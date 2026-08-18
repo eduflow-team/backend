@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user_id
@@ -20,8 +20,20 @@ from app.schemas.stage2 import (
     Step2HighlightRequest,
     Step2HighlightResponse,
 )
+from app.schemas.stage3 import (
+    Stage3AssignmentDetailResponse,
+    Stage3CreateRequest,
+    Stage3CreateResponse,
+    Stage3DebateRequest,
+    Stage3DebateResponse,
+    Stage3FactcheckRequest,
+    Stage3FactcheckResponse,
+    Stage3SubmitRequest,
+    Stage3SubmitResponse,
+)
 from app.services.assignment_service import AssignmentService
 from app.services.stage2_service import Stage2Service
+from app.services.stage3_service import Stage3Service
 
 router = APIRouter()
 
@@ -173,6 +185,7 @@ async def create_step1_assignment(
     default_chunk_size: int = Form(200),
     default_top_k: int = Form(2),
     default_temperature: float = Form(0.9),
+    due_at: str | None = Form(None, description="마감 시각 ISO8601 (선택)"),
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
@@ -186,6 +199,7 @@ async def create_step1_assignment(
         default_chunk_size=default_chunk_size,
         default_top_k=default_top_k,
         default_temperature=default_temperature,
+        due_at=due_at,
         file=file,
     )
 
@@ -229,3 +243,107 @@ async def create_step2_assignment(
         expected_error_count=expected_error_count,
         file=file,
     )
+
+
+@router.get(
+    "/student/assignments/{id}/step3",
+    summary="3단계 과제 상세",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage3AssignmentDetailResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step3_assignment(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage3AssignmentDetailResponse:
+    return await Stage3Service(db).get_step3_assignment(user_id, id)
+
+
+@router.post(
+    "/student/assignments/{id}/step3/debate",
+    summary="3단계 토론 시작",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage3DebateResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
+)
+async def start_step3_debate(
+    id: int,
+    payload: Stage3DebateRequest | None = Body(default=None),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage3DebateResponse:
+    return await Stage3Service(db).start_debate(user_id, id, payload)
+
+
+@router.post(
+    "/student/assignments/{id}/step3/factcheck",
+    summary="3단계 발언 팩트체크",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage3FactcheckResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def factcheck_step3_turn(
+    id: int,
+    payload: Stage3FactcheckRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage3FactcheckResponse:
+    return await Stage3Service(db).factcheck_turn(user_id, id, payload)
+
+
+@router.post(
+    "/student/assignments/{id}/step3/submit",
+    summary="3단계 팩트체커 사용 제출 및 채점",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage3SubmitResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def submit_step3_assignment(
+    id: int,
+    payload: Stage3SubmitRequest | None = Body(default=None),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage3SubmitResponse:
+    return await Stage3Service(db).submit_step3(
+        user_id, id, payload or Stage3SubmitRequest()
+    )
+
+
+@router.post(
+    "/teacher/assignments/step3",
+    summary="3단계 토론 과제 생성",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Stage3CreateResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+    },
+)
+async def create_step3_assignment(
+    payload: Stage3CreateRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage3CreateResponse:
+    return await Stage3Service(db).create_step3_assignment(user_id, payload)

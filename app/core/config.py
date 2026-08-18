@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     LANGFLOW_STAGE2_FLOW_ID: str = ""
     LANGFLOW_STAGE2_GEN_PROMPT_NODE_ID: str = ""
     LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID: str = ""
+    LANGFLOW_STAGE3_FLOW_ID: str = ""
+    LANGFLOW_STAGE3_V2_FLOW_ID: str = ""
+    LANGFLOW_STAGE3_PRO_AGENT_ID: str = "LM-s3pro"
+    LANGFLOW_STAGE3_CON_AGENT_ID: str = "LM-s3con"
+    LANGFLOW_STAGE3_FACT_AGENT_ID: str = "LM-s3fact"
+    LANGFLOW_STAGE3_V1_ENDPOINT: str = "stage3-debate"
+    LANGFLOW_STAGE3_V2_ENDPOINT: str = "stage3-debate-v2"
 
     # Stage 1 업로드 제한
     STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
@@ -43,6 +50,11 @@ class Settings(BaseSettings):
     STAGE2_LOCATION_THRESHOLD: float = 0.8
     STAGE2_REASONING_THRESHOLD: float = 0.95
     STAGE2_CORRECTION_MIN_SCORE: int = 4
+
+    # Stage 3
+    STAGE3_MAX_ATTEMPTS: int = 3
+    # Langflow 미연결 로컬 개발 시에만 true (기본: 503)
+    STAGE3_ALLOW_MOCK: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

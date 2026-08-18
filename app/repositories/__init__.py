@@ -20,6 +20,8 @@ from app.repositories.stage import (
     Stage2DetailRepository,
     Stage2ErrorAnswerRepository,
     Stage2HighlightRepository,
+    Stage3AttemptRepository,
+    Stage3DetailRepository,
 )
 from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.submission import SubmissionRepository
@@ -50,6 +52,8 @@ get_stage2_error_answer_repository = _repo_factory(Stage2ErrorAnswerRepository)
 get_stage1_attempt_repository = _repo_factory(Stage1AttemptRepository)
 get_stage2_highlight_repository = _repo_factory(Stage2HighlightRepository)
 get_stage2_correction_repository = _repo_factory(Stage2CorrectionRepository)
+get_stage3_detail_repository = _repo_factory(Stage3DetailRepository)
+get_stage3_attempt_repository = _repo_factory(Stage3AttemptRepository)
 get_notice_repository = _repo_factory(NoticeRepository)
 get_attendance_repository = _repo_factory(AttendanceRepository)
 
@@ -69,6 +73,8 @@ __all__ = [
     "Stage2DetailRepository",
     "Stage2ErrorAnswerRepository",
     "Stage2HighlightRepository",
+    "Stage3AttemptRepository",
+    "Stage3DetailRepository",
     "StudentAssignmentStatusRepository",
     "SubmissionRepository",
     "UserRepository",
@@ -86,6 +92,8 @@ __all__ = [
     "get_stage2_detail_repository",
     "get_stage2_error_answer_repository",
     "get_stage2_highlight_repository",
+    "get_stage3_attempt_repository",
+    "get_stage3_detail_repository",
     "get_student_status_repository",
     "get_submission_repository",
     "get_user_repository",

@@ -107,6 +107,7 @@ class AssignmentService:
         default_top_k: int,
         default_temperature: float,
         file: UploadFile,
+        due_at: str | None = None,
     ) -> Stage1CreateResponse:
         teacher = await self._get_authorized_teacher(user_id)
         allowed_class_ids = await self._get_teacher_class_ids(teacher)
@@ -143,6 +144,7 @@ class AssignmentService:
             logger.exception("stage1 document processing failed")
             raise Stage1DocumentProcessingError() from exc
 
+        parsed_due_at = self._parse_due_at(due_at)
         assignment = Assignment(
             teacher_id=teacher.user_id,
             class_id=class_id,
@@ -151,6 +153,7 @@ class AssignmentService:
             subject=subject,
             description=question,
             max_attempts=settings.STAGE1_MAX_ATTEMPTS,
+            due_at=parsed_due_at,
         )
         assignment = await self.assignment_repository.create(assignment)
 
@@ -243,6 +246,9 @@ class AssignmentService:
             if best.parameters:
                 best_parameters = self._parse_parameters(best.parameters)
 
+        documents = await self.document_repository.get_by_assignment_id(assignment_id)
+        document = documents[0] if documents else None
+
         return Stage1AssignmentDetailResponse(
             assignment_id=assignment.assignment_id,
             question=detail.question or "",
@@ -256,6 +262,10 @@ class AssignmentService:
             ),
             highest_score=highest_score,
             best_parameters=best_parameters,
+            document_filename=document.filename if document else None,
+            document_text=document.raw_text if document else None,
+            due_at=assignment.due_at,
+            subject=assignment.subject,
         )
 
     # ------------------------------------------------------------------
@@ -506,6 +516,19 @@ class AssignmentService:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidStage1ParameterError() from exc
+
+    @staticmethod
+    def _parse_due_at(raw: str | None) -> datetime | None:
+        if not raw or not str(raw).strip():
+            return None
+        text = str(raw).strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise InvalidStage1CreateError("마감 시각 형식이 올바르지 않습니다.") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
     async def _save_upload_file(
         self, assignment_id: int, filename: str, content: bytes

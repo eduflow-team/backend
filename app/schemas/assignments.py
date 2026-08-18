@@ -100,6 +100,16 @@ class Stage1AssignmentDetailResponse(BaseModel):
     attempts: Stage1AttemptsDetail
     highest_score: int | None = None
     best_parameters: Stage1Parameters | None = None
+    document_filename: str | None = None
+    document_text: str | None = None
+    due_at: datetime | None = None
+    subject: str | None = None
+
+    @field_serializer("due_at")
+    def serialize_due_at(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class Stage1CreateResponse(BaseModel):

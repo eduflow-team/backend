@@ -336,3 +336,61 @@ class Stage2LangflowServiceUnavailableError(DomainException):
     default_message = (
         "AI 답변 생성 서비스에 일시적 장애가 발생했습니다. 잠시 후 다시 시도해 주세요."
     )
+
+
+class Stage3LangflowServiceUnavailableError(DomainException):
+    """Langflow 3단계 다중 에이전트 토론 파이프라인 장애·타임아웃 시 발생 (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_message = (
+        "AI 토론 생성 서비스에 일시적 장애가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    )
+
+
+class Stage3AccessForbiddenError(DomainException):
+    """3단계 과제 API를 role·학급 권한이 없는 계정으로 접근할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 과제에 접근할 권한이 없습니다."
+
+
+class InvalidStage3CreateError(DomainException):
+    """3단계 과제 생성 시 필수 필드가 누락됐거나 형식이 올바르지 않을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "필수 파라미터(토론 주제, 페르소나 등)가 누락되었습니다."
+
+
+class Stage3DebateNotStartedError(DomainException):
+    """토론을 시작하기 전에 팩트체크·제출을 호출했을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "토론을 먼저 시작해 주세요."
+
+
+class Stage3TurnNotFoundError(DomainException):
+    """존재하지 않는 발언(turn_id)을 팩트체크하려 할 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "존재하지 않는 발언입니다."
+
+
+class Stage3SubmitLimitExceededError(DomainException):
+    """3단계 제출 시도 횟수를 초과했을 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "최대 시도 횟수(3회)를 모두 소진하여 더 이상 제출할 수 없습니다."
+
+
+class Stage3AlreadySubmittedError(DomainException):
+    """이미 제출한 토론 세션을 다시 수정하려 할 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "이미 최종 제출하여 더 이상 수정할 수 없습니다."
+
+
+class InvalidStage3SubmitError(DomainException):
+    """3단계 제출 데이터가 누락되었거나 형식이 올바르지 않을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "제출 데이터가 누락되었거나 형식이 올바르지 않습니다."

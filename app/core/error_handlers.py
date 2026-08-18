@@ -19,6 +19,11 @@ _FIELD_LABELS: dict[str, str] = {
     "name": "이름",
     "phone": "전화번호",
     "role": "role",
+    "topic": "토론 주제",
+    "pro_persona": "찬성 페르소나",
+    "con_persona": "반대 페르소나",
+    "class_id": "학급 ID",
+    "turn_id": "turn_id",
 }
 
 _SOCIAL_LOGIN_FIELDS = {"provider", "social_token"}
