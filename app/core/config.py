@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     STAGE1_MAX_ATTEMPTS: int = 2
     # chat/create에서 허용하는 chunk_size (업로드 시 preset 전부 임베딩)
     STAGE1_CHUNK_SIZE_PRESETS: tuple[int, ...] = (50, 200, 500, 1200, 3000)
+    # 교사 출제 시 학생 시작 파라미터 (교사 UI에서 설정하지 않음 · 고정)
+    STAGE1_DEFAULT_CHUNK_SIZE: int = 50
+    STAGE1_DEFAULT_TOP_K: int = 2
+    STAGE1_DEFAULT_TEMPERATURE: float = 1.0
     # 최종 = 정답점수(0|100) − w×resource_penalty(0~100). temperature 감점 없음.
     STAGE1_RESOURCE_PENALTY_WEIGHT: float = 0.3  # 최대 약 30점 감점
     STAGE1_K_SCALE: int = 6  # default top_k 대비 +6이면 top_k 축 만땅
@@ -54,6 +58,12 @@ class Settings(BaseSettings):
     # Tesseract 없을 때 OpenAI Vision으로 페이지 OCR (비용 발생)
     STAGE1_PDF_OCR_OPENAI_FALLBACK: bool = True
     STAGE1_PDF_OCR_MAX_PAGES: int = 40
+    # 검색 약할 때 Langflow context에 WEAK 모드(+노이즈) 주입 (UI preview에는 미포함)
+    STAGE1_WEAK_MAX_CHARS: int = 350
+    STAGE1_WEAK_MAX_SCORE: float = 0.42
+    STAGE1_WEAK_CHUNK_SIZE: int = 50
+    STAGE1_WEAK_TOP_K: int = 2
+    STAGE1_WEAK_NOISE_ENABLED: bool = True
 
     # Stage 2
     STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB

@@ -334,6 +334,13 @@ class Stage2ReferenceDocumentNotFoundError(DomainException):
     default_message = "참고 문서를 찾을 수 없습니다."
 
 
+class Stage1DocumentNotFoundError(DomainException):
+    """1단계 학습 자료 원본 파일이 없거나 읽을 수 없을 때 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "학습 자료를 찾을 수 없습니다."
+
+
 class Stage1LangflowServiceUnavailableError(DomainException):
     """Langflow 1단계 RAG chat 생성 장애·타임아웃 시 발생 (503)."""
 

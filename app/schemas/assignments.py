@@ -101,6 +101,7 @@ class Stage1AssignmentDetailResponse(BaseModel):
     highest_score: int | None = None
     best_parameters: Stage1Parameters | None = None
     document_filename: str | None = None
+    document_url: str | None = None
     document_text: str | None = None
     # 마감 전 False. True일 때만 correct_answer 채움
     is_answer_revealed: bool = False

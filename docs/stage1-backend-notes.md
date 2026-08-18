@@ -13,7 +13,8 @@
 | POST | `/student/assignments/{id}/step1/submit` | `student_answer` + `final_parameters` |
 
 ### create Form
-`class_id`, `subject`, `question`, `answer`, `due_at`, `default_chunk_size`, `default_top_k`, `default_temperature`, `file`
+`class_id`, `subject`, `question`, `answer`, `due_at`, `file`  
+시작 파라미터는 서버 고정: **chunk 50 · top_k 2 · temperature 1.0** (`STAGE1_DEFAULT_*`)
 
 ### submit Body
 ```json
@@ -40,4 +41,12 @@
 ## Langflow
 
 env: `LANGFLOW_URL`, `LANGFLOW_API_KEY`, `LANGFLOW_STAGE1_*`  
-채팅은 힌트·근거 탐색용 (제출 본문 아님)
+채팅은 근거 탐색용 (제출 본문 아님).
+
+### WEAK / STRONG context 래핑
+
+검색 품질이 약하면 Langflow용 `context`에 `[내부모드: WEAK]` + 시대착오 노이즈를 붙인다.  
+충분하면 `[내부모드: STRONG]`. 학생 UI `retrieved_chunk_previews`에는 **실청크만**.
+
+판정(기본): chars < 350 **또는** score < 0.42 **또는** (`chunk_size<=50` and `top_k<=2`)  
+코드: `app/services/stage1_context.py` · 설정: `STAGE1_WEAK_*`

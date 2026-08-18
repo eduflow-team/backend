@@ -71,9 +71,6 @@ async def main() -> None:
             "question": "대한민국 임시정부는 어디에 세워졌나요?",
             "answer": "상하이",
             "due_at": due,
-            "default_chunk_size": "50",
-            "default_top_k": "2",
-            "default_temperature": "1.0",
         }
         r = await client.post(
             "/api/v1/teacher/assignments/step1",

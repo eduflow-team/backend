@@ -27,6 +27,7 @@ from app.core.exceptions import (
     InvalidStage1SubmitError,
     InvalidTokenError,
     Stage1AccessForbiddenError,
+    Stage1DocumentNotFoundError,
     Stage1DocumentProcessingError,
     Stage1FileTooLargeError,
     Stage1SubmitLimitExceededError,
@@ -69,11 +70,24 @@ from app.services.embedding_service import (
     extract_text_from_upload,
     split_text_into_chunks,
 )
+from app.services.stage1_context import (
+    format_stage1_topk_sentences,
+    is_stage1_weak_retrieval,
+    redact_stage1_answer_leak,
+    wrap_stage1_langflow_context,
+)
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_EXTENSIONS = {".txt", ".md", ".markdown", ".pdf"}
 _UPLOAD_DIR = Path("uploads/stage1")
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_DOCUMENT_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+}
 
 
 class AssignmentService:
@@ -104,9 +118,6 @@ class AssignmentService:
         question: str,
         answer: str,
         due_at: datetime,
-        default_chunk_size: int,
-        default_top_k: int,
-        default_temperature: float,
         file: UploadFile,
     ) -> Stage1CreateResponse:
         teacher = await self._get_authorized_teacher(user_id)
@@ -122,6 +133,9 @@ class AssignmentService:
             raise InvalidStage1CreateError()
 
         due_at = normalize_assignment_due_at(due_at)
+        default_chunk_size = settings.STAGE1_DEFAULT_CHUNK_SIZE
+        default_top_k = settings.STAGE1_DEFAULT_TOP_K
+        default_temperature = settings.STAGE1_DEFAULT_TEMPERATURE
         self._validate_parameters(default_chunk_size, default_top_k, default_temperature)
 
         suffix = Path(filename).suffix.lower()
@@ -251,9 +265,11 @@ class AssignmentService:
 
         documents = await self.document_repository.get_by_assignment_id(assignment_id)
         document_filename: str | None = None
+        document_url: str | None = None
         document_text: str | None = None
         if documents:
             document_filename = documents[0].filename
+            document_url = self._step1_document_url(assignment_id)
             raw = documents[0].raw_text or ""
             limit = settings.STAGE1_DOCUMENT_TEXT_MAX_CHARS
             document_text = raw[:limit] if raw else None
@@ -273,10 +289,22 @@ class AssignmentService:
             highest_score=highest_score,
             best_parameters=best_parameters,
             document_filename=document_filename,
+            document_url=document_url,
             document_text=document_text,
             is_answer_revealed=revealed,
             correct_answer=(detail.answer if revealed else None),
         )
+
+    async def get_step1_document(
+        self, user_id: int, assignment_id: int
+    ) -> tuple[Path, str, str]:
+        """학생용 학습 자료 원본 파일 경로·파일명·media type."""
+        student = await self._get_authorized_student(user_id)
+        await self._get_stage1_assignment_for_student(student, assignment_id)
+        documents = await self.document_repository.get_by_assignment_id(assignment_id)
+        if not documents:
+            raise Stage1DocumentNotFoundError()
+        return self._resolve_document_file(documents[0])
 
     # ------------------------------------------------------------------
     # Student: chat
@@ -308,12 +336,29 @@ class AssignmentService:
             message=payload.message,
             top_k=params.top_k,
             chunk_size=params.chunk_size,
+            document_text=document.raw_text or "",
         )
+
+        # UI preview는 실제 검색 청크만. Langflow용 context만 WEAK/STRONG 래핑.
+        mode = (
+            "WEAK"
+            if is_stage1_weak_retrieval(
+                approx_context_chars=visualization.approx_context_chars,
+                vector_search_score=visualization.vector_search_score,
+                chunk_size=params.chunk_size,
+                top_k=params.top_k,
+            )
+            else "STRONG"
+        )
+        langflow_context = wrap_stage1_langflow_context(context, mode=mode)
 
         ai_response = await self.langflow_client.run_stage1_chat(
             message=payload.message,
-            context=context,
+            context=langflow_context,
             temperature=params.temperature,
+        )
+        ai_response = redact_stage1_answer_leak(
+            ai_response, detail.answer or ""
         )
 
         status = await self.status_repository.get_or_create(
@@ -549,6 +594,29 @@ class AssignmentService:
         return path
 
     @staticmethod
+    def _step1_document_url(assignment_id: int) -> str:
+        return (
+            f"{settings.API_V1_STR.rstrip('/')}/student/assignments/"
+            f"{assignment_id}/step1/document"
+        )
+
+    @classmethod
+    def _resolve_document_file(cls, document: Document) -> tuple[Path, str, str]:
+        if not document.file_path:
+            raise Stage1DocumentNotFoundError()
+
+        path = Path(document.file_path)
+        if not path.is_absolute():
+            path = _BACKEND_ROOT / path
+        if not path.is_file():
+            raise Stage1DocumentNotFoundError()
+
+        filename = Path(document.filename or path.name).name
+        suffix = path.suffix.lower()
+        media_type = _DOCUMENT_MEDIA_TYPES.get(suffix, "application/octet-stream")
+        return path, filename, media_type
+
+    @staticmethod
     def _is_answer_revealed(due_at: datetime | None) -> bool:
         if due_at is None:
             return False
@@ -717,6 +785,7 @@ class AssignmentService:
         message: str,
         top_k: int,
         chunk_size: int,
+        document_text: str = "",
     ) -> tuple[str, RagProcessVisualization]:
         query_embedding = await embed_text(message)
         ranked: list[tuple[float, str]] = []
@@ -726,10 +795,12 @@ class AssignmentService:
         ranked.sort(key=lambda item: item[0], reverse=True)
 
         selected = ranked[:top_k]
-        previews = [text.strip() for _, text in selected if text.strip()]
-        context = "\n\n".join(previews)
+        raw_chunks = [text.strip() for _, text in selected if text.strip()]
+        # Langflow에는 실제 검색 청크, UI에는 문장처럼 정리한 참고문
+        context = "\n\n".join(raw_chunks)
+        previews = format_stage1_topk_sentences(raw_chunks, document_text)
         best_score = selected[0][0] if selected else 0.0
-        approx_chars = sum(len(p) for p in previews) or (top_k * chunk_size)
+        approx_chars = sum(len(p) for p in raw_chunks) or (top_k * chunk_size)
         visualization = RagProcessVisualization(
             total_chunks=len(chunk_vectors),
             retrieved_chunks=len(selected),

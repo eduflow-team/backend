@@ -52,6 +52,32 @@ async def get_step1_assignment(
     return await AssignmentService(db).get_step1_assignment(user_id, id)
 
 
+@router.get(
+    "/student/assignments/{id}/step1/document",
+    summary="1단계 학습 자료(원본 PDF 등) 조회",
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step1_document(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    path, filename, media_type = await AssignmentService(db).get_step1_document(
+        user_id, id
+    )
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=filename,
+        content_disposition_type="inline",
+    )
+
+
 @router.post(
     "/student/assignments/{id}/step1/chat",
     summary="AI 질의응답",
@@ -205,14 +231,11 @@ async def create_step1_assignment(
     question: str = Form(..., description="학생이 풀 퀴즈 문제 1개"),
     answer: str = Form(..., description="정답 1개 (교과서 표현)"),
     due_at: datetime = Form(..., description="마감 일시 (ISO 8601)"),
-    default_chunk_size: int = Form(50),
-    default_top_k: int = Form(2),
-    default_temperature: float = Form(1.0),
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> Stage1CreateResponse:
-    """교사 문제·정답 + 학습 자료 업로드. preset 청크 임베딩 후 과제 생성."""
+    """교사 문제·정답 + 학습 자료 업로드. 시작 파라미터는 서버 고정(50/2/1.0)."""
     return await AssignmentService(db).create_step1_assignment(
         user_id,
         class_id=class_id,
@@ -220,9 +243,6 @@ async def create_step1_assignment(
         question=question,
         answer=answer,
         due_at=due_at,
-        default_chunk_size=default_chunk_size,
-        default_top_k=default_top_k,
-        default_temperature=default_temperature,
         file=file,
     )
 
