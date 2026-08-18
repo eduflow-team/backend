@@ -5,6 +5,10 @@ from app.models.stage import (
     Stage2AssignmentDetail,
     Stage2ErrorAnswer,
 )
+from app.schemas.stage2_generation import (
+    Stage2GenerationMetadata,
+    dump_stage2_generation_metadata,
+)
 from app.models.submission import (
     Stage1Attempt,
     Stage2CorrectionSubmission,
@@ -33,6 +37,14 @@ class Stage2DetailRepository(BaseRepository[Stage2AssignmentDetail]):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def set_generation_metadata(
+        self,
+        detail: Stage2AssignmentDetail,
+        metadata: Stage2GenerationMetadata,
+    ) -> Stage2AssignmentDetail:
+        detail.generation_metadata = dump_stage2_generation_metadata(metadata)
+        return await self.update(detail)
 
 
 class Stage2ErrorAnswerRepository(BaseRepository[Stage2ErrorAnswer]):

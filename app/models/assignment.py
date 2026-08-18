@@ -21,6 +21,10 @@ class Assignment(Base):
     subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    set_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    publish_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="PUBLISHED"
+    )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True

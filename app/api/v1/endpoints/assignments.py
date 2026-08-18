@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user_id
@@ -17,6 +18,10 @@ from app.schemas.dashboard import ErrorDetail
 from app.schemas.stage2 import (
     Stage2AssignmentDetailResponse,
     Stage2CreateResponse,
+    Stage2SetCreateResponse,
+    Stage2SetDetailResponse,
+    Stage2SetPublishRequest,
+    Stage2SetPublishResponse,
     Step2CorrectionRequest,
     Step2CorrectionResponse,
     Step2HighlightRequest,
@@ -108,6 +113,32 @@ async def get_step2_assignment(
     db: AsyncSession = Depends(get_db),
 ) -> Stage2AssignmentDetailResponse:
     return await Stage2Service(db).get_step2_assignment(user_id, id)
+
+
+@router.get(
+    "/student/assignments/{id}/step2/document",
+    summary="2단계 참고 문서(PDF) 조회",
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step2_reference_document(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    path, filename, media_type = await Stage2Service(db).get_step2_reference_document(
+        user_id, id
+    )
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.post(
@@ -221,7 +252,7 @@ async def create_step2_assignment(
         ...,
         description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
     ),
-    expected_error_count: int = Form(..., ge=1, le=5),
+    expected_error_count: int = Form(1, ge=1, le=1),
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
@@ -237,3 +268,86 @@ async def create_step2_assignment(
         expected_error_count=expected_error_count,
         file=file,
     )
+
+
+@router.post(
+    "/teacher/assignments/step2/set",
+    summary="2단계 카드 세트 생성",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Stage2SetCreateResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        413: {"model": ErrorDetail},
+        415: {"model": ErrorDetail},
+        500: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
+)
+async def create_step2_set(
+    title: str = Form(...),
+    subject: str = Form(...),
+    question: str = Form(...),
+    persona: str = Form(..., max_length=100),
+    due_at: datetime = Form(..., description="마감 일시 (ISO 8601)"),
+    hallucination_types: str = Form(
+        ...,
+        description='JSON 배열. 예: ["PERSONA_BIAS","RETRIEVAL_ERROR"]',
+    ),
+    card_count: int = Form(..., ge=1, le=3),
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2SetCreateResponse:
+    return await Stage2Service(db).create_step2_set(
+        user_id,
+        title=title,
+        subject=subject,
+        question=question,
+        persona=persona,
+        due_at=due_at,
+        hallucination_types_raw=hallucination_types,
+        card_count=card_count,
+        file=file,
+    )
+
+
+@router.get(
+    "/teacher/assignments/step2/set/{set_id}",
+    summary="2단계 카드 세트 조회",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage2SetDetailResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step2_set(
+    set_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2SetDetailResponse:
+    return await Stage2Service(db).get_step2_set(user_id, set_id)
+
+
+@router.patch(
+    "/teacher/assignments/step2/set/{set_id}",
+    summary="2단계 카드 세트 배포",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage2SetPublishResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def publish_step2_set(
+    set_id: int,
+    payload: Stage2SetPublishRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage2SetPublishResponse:
+    return await Stage2Service(db).publish_step2_set(user_id, set_id, payload)
