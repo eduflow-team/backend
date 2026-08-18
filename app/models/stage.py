@@ -17,14 +17,10 @@ class Stage1AssignmentDetail(Base):
     )
     parameter_guide: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     default_parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # 채점용 정답 파라미터(학생 API 미노출). create 시 서버가 자동 탐색해 저장.
-    optimal_parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 교사 입력 정답 1개 (학생 API는 마감 후에만 노출)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     guideline: Mapped[str | None] = mapped_column(Text, nullable=True)
-    persona: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    hallucination_types: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    hallucination_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
-    expected_hallucination_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True
     )

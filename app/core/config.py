@@ -33,31 +33,18 @@ class Settings(BaseSettings):
 
     # Stage 1 업로드 제한
     STAGE1_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
-    STAGE1_MAX_ATTEMPTS: int = 3
-    # chat/create에서 허용하는 chunk_size (업로드 시 전부에 전부 임베딩)
+    # 답안 제출 최대 횟수 (채팅은 제한 없음)
+    STAGE1_MAX_ATTEMPTS: int = 2
+    # chat/create에서 허용하는 chunk_size (업로드 시 preset 전부 임베딩)
     STAGE1_CHUNK_SIZE_PRESETS: tuple[int, ...] = (50, 200, 500, 1200, 3000)
-    # 최종점수 = 0.8×optimal근접 + 0.2×답변품질
-    STAGE1_PROXIMITY_WEIGHT: float = 0.8
-    STAGE1_QUALITY_WEIGHT: float = 0.2
-    # optimal 탐색: 최고 품질의 이 비율 이상인 후보 중 가장 약한 설정을 고름
-    STAGE1_OPTIMAL_ELBOW_RATIO: float = 0.90
-    STAGE1_OPTIMAL_TOP_K_CANDIDATES: tuple[int, ...] = (1, 2, 3, 5, 8)
-    STAGE1_OPTIMAL_TEMP_CANDIDATES: tuple[float, ...] = (0.0, 0.2, 0.5, 1.0)
-    STAGE1_OPTIMAL_FALLBACK: dict = {
-        "chunk_size": 500,
-        "top_k": 3,
-        "temperature": 0.2,
-    }
-    # 학생 AI 채팅·optimal 탐색용 고정 질문
-    STAGE1_FIXED_CHAT_MESSAGE: str = "오늘 학습 주제의 내용을 전체적으로 알려줘"
-    # 학생 AI 채팅용 고정 질문 가이드 (교사가 입력하지 않음)
-    STAGE1_FIXED_GUIDELINE: str = (
-        '"오늘 학습 주제의 내용을 전체적으로 알려줘"라고 AI에게 질문해보세요.'
-    )
-    STAGE1_QUESTION_FALLBACK: str = (
-        "업로드한 학습 자료에 대해 AI에게 질문하고, "
-        "파라미터를 조절하여 자료에 가장 잘 맞는 답변을 찾아보세요."
-    )
+    # 최종 = 정답점수(0|100) − w×resource_penalty(0~100). temperature 감점 없음.
+    STAGE1_RESOURCE_PENALTY_WEIGHT: float = 0.3  # 최대 약 30점 감점
+    STAGE1_K_SCALE: int = 6  # default top_k 대비 +6이면 top_k 축 만땅
+    STAGE1_CHUNK_SCALE: int = 3  # preset 3단계 올리면 chunk 축 만땅
+    STAGE1_RESOURCE_TOP_K_WEIGHT: float = 0.6
+    STAGE1_RESOURCE_CHUNK_WEIGHT: float = 0.4
+    # 학생 detail에 내려줄 추출 텍스트 상한(문자)
+    STAGE1_DOCUMENT_TEXT_MAX_CHARS: int = 80_000
     # 이미지 PDF OCR: pypdf 텍스트가 빈약하면 활성화
     STAGE1_PDF_OCR_ENABLED: bool = True
     STAGE1_PDF_OCR_MIN_CHARS: int = 200

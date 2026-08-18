@@ -393,6 +393,13 @@ class RecordService:
         if optimal_parameters := metadata.get("optimal_parameters"):
             return str(optimal_parameters)
 
+        if "is_correct" in metadata:
+            correct = "정답" if metadata.get("is_correct") else "오답"
+            penalty = metadata.get("resource_penalty")
+            if penalty is not None:
+                return f"{correct} · 리소스 감점 {penalty}"
+            return correct
+
         found_errors = metadata.get("found_errors")
         if isinstance(found_errors, list) and found_errors:
             return f"{len(found_errors)}/{len(found_errors)} ✅"
