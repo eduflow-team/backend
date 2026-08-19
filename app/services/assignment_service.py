@@ -1,8 +1,8 @@
 """Stage 1 과제 도메인 비즈니스 로직.
 
-검색·context·rag_process_visualization은 백엔드에서 조립하고,
-생성(ai_response)은 LangflowClient가 담당한다.
-chat은 동일 chunk_size면 DB 청크 임베딩을 재사용하고, temperature는 생성에만 쓴다.
+교사: PDF 업로드 + 퀴즈 1문제·정답 1개.
+학생: 자유 채팅으로 근거 탐색 후 본인 답안 제출.
+채점: 정답점수(0|100) − default 대비 리소스 감점(최대 ~30). temperature 감점 없음.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.langflow_client import LangflowClient
 from app.core.config import settings
+from app.core.datetime_utils import normalize_assignment_due_at
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage1CreateError,
@@ -26,6 +27,7 @@ from app.core.exceptions import (
     InvalidStage1SubmitError,
     InvalidTokenError,
     Stage1AccessForbiddenError,
+    Stage1DocumentNotFoundError,
     Stage1DocumentProcessingError,
     Stage1FileTooLargeError,
     Stage1SubmitLimitExceededError,
@@ -36,7 +38,6 @@ from app.models.document import Document, DocumentChunk
 from app.models.enums import ProgressStatus
 from app.models.evaluation import Evaluation
 from app.models.stage import Stage1AssignmentDetail
-from app.models.student_status import StudentAssignmentStatus
 from app.models.submission import Stage1Attempt, Submission
 from app.models.user import User
 from app.repositories.assignment import AssignmentRepository
@@ -69,11 +70,24 @@ from app.services.embedding_service import (
     extract_text_from_upload,
     split_text_into_chunks,
 )
+from app.services.stage1_context import (
+    format_stage1_topk_sentences,
+    is_stage1_weak_retrieval,
+    redact_stage1_answer_leak,
+    wrap_stage1_langflow_context,
+)
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_EXTENSIONS = {".txt", ".md", ".markdown", ".pdf"}
 _UPLOAD_DIR = Path("uploads/stage1")
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_DOCUMENT_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+}
 
 
 class AssignmentService:
@@ -102,12 +116,9 @@ class AssignmentService:
         class_id: int,
         subject: str,
         question: str,
-        guideline: str,
-        default_chunk_size: int,
-        default_top_k: int,
-        default_temperature: float,
+        answer: str,
+        due_at: datetime,
         file: UploadFile,
-        due_at: str | None = None,
     ) -> Stage1CreateResponse:
         teacher = await self._get_authorized_teacher(user_id)
         allowed_class_ids = await self._get_teacher_class_ids(teacher)
@@ -116,11 +127,15 @@ class AssignmentService:
 
         subject = (subject or "").strip()
         question = (question or "").strip()
-        guideline = (guideline or "").strip()
+        answer = (answer or "").strip()
         filename = (file.filename or "").strip()
-        if not subject or not question or not guideline or not filename:
+        if not subject or not filename or not question or not answer:
             raise InvalidStage1CreateError()
 
+        due_at = normalize_assignment_due_at(due_at)
+        default_chunk_size = settings.STAGE1_DEFAULT_CHUNK_SIZE
+        default_top_k = settings.STAGE1_DEFAULT_TOP_K
+        default_temperature = settings.STAGE1_DEFAULT_TEMPERATURE
         self._validate_parameters(default_chunk_size, default_top_k, default_temperature)
 
         suffix = Path(filename).suffix.lower()
@@ -134,7 +149,9 @@ class AssignmentService:
             raise Stage1FileTooLargeError()
 
         try:
-            raw_text = extract_text_from_upload(filename, content)
+            raw_text = await asyncio.to_thread(
+                extract_text_from_upload, filename, content
+            )
             preset_chunk_sets = await self._embed_preset_chunk_sets(raw_text)
         except UnsupportedStage1FileTypeError:
             raise
@@ -144,16 +161,15 @@ class AssignmentService:
             logger.exception("stage1 document processing failed")
             raise Stage1DocumentProcessingError() from exc
 
-        parsed_due_at = self._parse_due_at(due_at)
         assignment = Assignment(
             teacher_id=teacher.user_id,
             class_id=class_id,
-            title="1단계: 파라미터 조절을 통한 환각 완화",
+            title="1단계: 파라미터로 과제 문제 풀기",
             stage=1,
             subject=subject,
             description=question,
+            due_at=due_at,
             max_attempts=settings.STAGE1_MAX_ATTEMPTS,
-            due_at=parsed_due_at,
         )
         assignment = await self.assignment_repository.create(assignment)
 
@@ -165,7 +181,7 @@ class AssignmentService:
         detail = Stage1AssignmentDetail(
             assignment_id=assignment.assignment_id,
             question=question,
-            guideline=guideline,
+            answer=answer,
             default_parameters=default_parameters,
             parameter_guide=PARAMETER_EXPLANATIONS.model_dump(),
         )
@@ -202,6 +218,8 @@ class AssignmentService:
         return Stage1CreateResponse(
             assignment_id=assignment.assignment_id,
             created_at=assignment.created_at or datetime.now(UTC),
+            due_at=assignment.due_at,
+            question=question,
         )
 
     # ------------------------------------------------------------------
@@ -227,7 +245,6 @@ class AssignmentService:
         attempts = await self.attempt_repository.list_by_user_and_assignment(
             student.user_id, assignment_id
         )
-        # submit로 기록된 시도만 제출 횟수로 집계 (score가 있는 attempt)
         scored_attempts = [a for a in attempts if a.score is not None]
         used_attempts = len(scored_attempts)
         max_attempts = assignment.max_attempts or settings.STAGE1_MAX_ATTEMPTS
@@ -247,12 +264,21 @@ class AssignmentService:
                 best_parameters = self._parse_parameters(best.parameters)
 
         documents = await self.document_repository.get_by_assignment_id(assignment_id)
-        document = documents[0] if documents else None
+        document_filename: str | None = None
+        document_url: str | None = None
+        document_text: str | None = None
+        if documents:
+            document_filename = documents[0].filename
+            document_url = self._step1_document_url(assignment_id)
+            raw = documents[0].raw_text or ""
+            limit = settings.STAGE1_DOCUMENT_TEXT_MAX_CHARS
+            document_text = raw[:limit] if raw else None
 
+        revealed = self._is_answer_revealed(assignment.due_at)
         return Stage1AssignmentDetailResponse(
             assignment_id=assignment.assignment_id,
             question=detail.question or "",
-            guideline=detail.guideline or "",
+            due_at=assignment.due_at,
             parameter_explanations=PARAMETER_EXPLANATIONS,
             default_parameters=default_params,
             attempts=Stage1AttemptsDetail(
@@ -262,11 +288,23 @@ class AssignmentService:
             ),
             highest_score=highest_score,
             best_parameters=best_parameters,
-            document_filename=document.filename if document else None,
-            document_text=document.raw_text if document else None,
-            due_at=assignment.due_at,
-            subject=assignment.subject,
+            document_filename=document_filename,
+            document_url=document_url,
+            document_text=document_text,
+            is_answer_revealed=revealed,
+            correct_answer=(detail.answer if revealed else None),
         )
+
+    async def get_step1_document(
+        self, user_id: int, assignment_id: int
+    ) -> tuple[Path, str, str]:
+        """학생용 학습 자료 원본 파일 경로·파일명·media type."""
+        student = await self._get_authorized_student(user_id)
+        await self._get_stage1_assignment_for_student(student, assignment_id)
+        documents = await self.document_repository.get_by_assignment_id(assignment_id)
+        if not documents:
+            raise Stage1DocumentNotFoundError()
+        return self._resolve_document_file(documents[0])
 
     # ------------------------------------------------------------------
     # Student: chat
@@ -297,13 +335,30 @@ class AssignmentService:
             chunk_vectors,
             message=payload.message,
             top_k=params.top_k,
+            chunk_size=params.chunk_size,
+            document_text=document.raw_text or "",
         )
 
-        # temperature는 생성 단계에만 사용 (검색·임베딩과 분리)
+        # UI preview는 실제 검색 청크만. Langflow용 context만 WEAK/STRONG 래핑.
+        mode = (
+            "WEAK"
+            if is_stage1_weak_retrieval(
+                approx_context_chars=visualization.approx_context_chars,
+                vector_search_score=visualization.vector_search_score,
+                chunk_size=params.chunk_size,
+                top_k=params.top_k,
+            )
+            else "STRONG"
+        )
+        langflow_context = wrap_stage1_langflow_context(context, mode=mode)
+
         ai_response = await self.langflow_client.run_stage1_chat(
             message=payload.message,
-            context=context,
+            context=langflow_context,
             temperature=params.temperature,
+        )
+        ai_response = redact_stage1_answer_leak(
+            ai_response, detail.answer or ""
         )
 
         status = await self.status_repository.get_or_create(
@@ -330,16 +385,18 @@ class AssignmentService:
         self, user_id: int, assignment_id: int, payload: Stage1SubmitRequest
     ) -> Stage1SubmitResponse:
         student = await self._get_authorized_student(user_id)
-        assignment, _detail = await self._get_stage1_assignment_for_student(
+        assignment, detail = await self._get_stage1_assignment_for_student(
             student, assignment_id
         )
         params = payload.final_parameters
         self._validate_parameters(params.chunk_size, params.top_k, params.temperature)
 
-        if not payload.selected_ai_response.strip():
+        student_answer = payload.student_answer.strip()
+        if not student_answer:
             raise InvalidStage1SubmitError()
-        if not payload.student_prompt.strip():
-            raise InvalidStage1SubmitError()
+        correct_answer = (detail.answer or "").strip()
+        if not correct_answer:
+            raise AssignmentNotFoundError("과제 정답이 설정되지 않았습니다.")
 
         max_attempts = assignment.max_attempts or settings.STAGE1_MAX_ATTEMPTS
         status = await self.status_repository.get_or_create(
@@ -355,15 +412,20 @@ class AssignmentService:
         if used >= max_attempts:
             raise Stage1SubmitLimitExceededError()
 
-        documents = await self.document_repository.get_by_assignment_id(assignment_id)
-        source_text = documents[0].raw_text if documents else ""
-        report, current_score = await self._evaluate_response(
-            selected_ai_response=payload.selected_ai_response,
-            source_text=source_text or "",
-            question=assignment.description or "",
+        default_params = self._parse_parameters(detail.default_parameters)
+        is_correct = self._answers_match(student_answer, correct_answer)
+        correct_score = 100 if is_correct else 0
+        resource_penalty, penalty_meta = self._resource_penalty_points(
+            default=default_params,
+            submitted=params,
+        )
+        current_score = max(0, correct_score - resource_penalty)
+        report = self._build_evaluation_report(
+            is_correct=is_correct,
+            correct_score=correct_score,
+            resource_penalty=resource_penalty,
         )
 
-        # records 대표 제출: 이전 final 해제 후 이번 제출만 is_final=True
         await self.submission_repository.clear_final_for_user_and_assignment(
             student.user_id, assignment_id
         )
@@ -371,7 +433,7 @@ class AssignmentService:
             user_id=student.user_id,
             assignment_id=assignment_id,
             stage=1,
-            submitted_answer=payload.selected_ai_response,
+            submitted_answer=student_answer,
             final_parameters=params.model_dump(),
             current_score=current_score,
             is_final=True,
@@ -383,8 +445,8 @@ class AssignmentService:
             user_id=student.user_id,
             assignment_id=assignment_id,
             submission_id=submission.submission_id,
-            student_prompt=payload.student_prompt,
-            ai_response=payload.selected_ai_response,
+            student_prompt=student_answer,
+            ai_response=None,
             attempt_number=attempt_number,
             temperature=Decimal(str(params.temperature)),
             parameters=params.model_dump(),
@@ -394,12 +456,15 @@ class AssignmentService:
 
         evaluation = Evaluation(
             submission_id=submission.submission_id,
-            factuality_score=report.faithfulness_score,
-            relevance_score=report.relevance_score,
+            factuality_score=5 if is_correct else 1,
+            relevance_score=5 if is_correct else 1,
             feedback=report.feedback,
             evaluation_metadata={
-                "faithfulness_score": report.faithfulness_score,
-                "relevance_score": report.relevance_score,
+                "is_correct": is_correct,
+                "correct_score": correct_score,
+                "resource_penalty": resource_penalty,
+                "summary": report.feedback,
+                **penalty_meta,
             },
         )
         await self.evaluation_repository.create(evaluation)
@@ -421,15 +486,18 @@ class AssignmentService:
         )
         await self.session.commit()
 
+        revealed = self._is_answer_revealed(assignment.due_at)
         return Stage1SubmitResponse(
             current_score=current_score,
             highest_score=new_best,
             is_highest_score=is_highest,
+            is_correct=is_correct,
             evaluation_report=report,
             attempts=Stage1AttemptsInfo(
                 used_attempts=attempt_number,
                 remaining_attempts=remaining,
             ),
+            correct_answer=(correct_answer if revealed else None),
         )
 
     # ------------------------------------------------------------------
@@ -490,8 +558,6 @@ class AssignmentService:
     async def _embed_preset_chunk_sets(
         self, raw_text: str
     ) -> list[tuple[int, list[tuple[str, list[float]]]]]:
-        """preset chunk_size마다 청킹 후 임베딩한다. 동시성은 최대 2로 제한."""
-
         presets = settings.STAGE1_CHUNK_SIZE_PRESETS
         sem = asyncio.Semaphore(2)
 
@@ -507,7 +573,7 @@ class AssignmentService:
 
     def _parse_parameters(self, raw: dict | None) -> Stage1Parameters:
         if not raw:
-            return Stage1Parameters(chunk_size=200, top_k=2, temperature=0.9)
+            return Stage1Parameters(chunk_size=50, top_k=2, temperature=1.0)
         try:
             return Stage1Parameters(
                 chunk_size=int(raw["chunk_size"]),
@@ -516,19 +582,6 @@ class AssignmentService:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidStage1ParameterError() from exc
-
-    @staticmethod
-    def _parse_due_at(raw: str | None) -> datetime | None:
-        if not raw or not str(raw).strip():
-            return None
-        text = str(raw).strip().replace("Z", "+00:00")
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError as exc:
-            raise InvalidStage1CreateError("마감 시각 형식이 올바르지 않습니다.") from exc
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
 
     async def _save_upload_file(
         self, assignment_id: int, filename: str, content: bytes
@@ -539,6 +592,122 @@ class AssignmentService:
         path = directory / safe_name
         path.write_bytes(content)
         return path
+
+    @staticmethod
+    def _step1_document_url(assignment_id: int) -> str:
+        return (
+            f"{settings.API_V1_STR.rstrip('/')}/student/assignments/"
+            f"{assignment_id}/step1/document"
+        )
+
+    @classmethod
+    def _resolve_document_file(cls, document: Document) -> tuple[Path, str, str]:
+        if not document.file_path:
+            raise Stage1DocumentNotFoundError()
+
+        path = Path(document.file_path)
+        if not path.is_absolute():
+            path = _BACKEND_ROOT / path
+        if not path.is_file():
+            raise Stage1DocumentNotFoundError()
+
+        filename = Path(document.filename or path.name).name
+        suffix = path.suffix.lower()
+        media_type = _DOCUMENT_MEDIA_TYPES.get(suffix, "application/octet-stream")
+        return path, filename, media_type
+
+    @staticmethod
+    def _is_answer_revealed(due_at: datetime | None) -> bool:
+        if due_at is None:
+            return False
+        now = datetime.now(UTC)
+        compare = due_at if due_at.tzinfo else due_at.replace(tzinfo=UTC)
+        return now >= compare.astimezone(UTC)
+
+    @staticmethod
+    def _normalize_answer(text: str) -> str:
+        """공백·구두점 정리 후 소문자 비교용 문자열."""
+        normalized = (text or "").strip().casefold()
+        normalized = re.sub(r"\s+", "", normalized)
+        normalized = re.sub(r"[\"'“”‘’.,!?·・/\-––—()\[\]{}]", "", normalized)
+        return normalized
+
+    @classmethod
+    def _answers_match(cls, student_answer: str, correct_answer: str) -> bool:
+        return cls._normalize_answer(student_answer) == cls._normalize_answer(
+            correct_answer
+        )
+
+    def _resource_penalty_points(
+        self,
+        *,
+        default: Stage1Parameters,
+        submitted: Stage1Parameters,
+    ) -> tuple[int, dict]:
+        """default보다 키운 top_k/chunk만 감점. temperature 제외. 최대 ~30점."""
+        presets = list(settings.STAGE1_CHUNK_SIZE_PRESETS)
+        try:
+            default_idx = presets.index(default.chunk_size)
+        except ValueError:
+            default_idx = 0
+        try:
+            submitted_idx = presets.index(submitted.chunk_size)
+        except ValueError:
+            submitted_idx = default_idx
+
+        k_scale = max(1, int(settings.STAGE1_K_SCALE))
+        chunk_scale = max(1, int(settings.STAGE1_CHUNK_SCALE))
+        penalty_k = min(1.0, max(0, submitted.top_k - default.top_k) / k_scale)
+        penalty_chunk = min(
+            1.0, max(0, submitted_idx - default_idx) / chunk_scale
+        )
+        resource = 100.0 * (
+            settings.STAGE1_RESOURCE_TOP_K_WEIGHT * penalty_k
+            + settings.STAGE1_RESOURCE_CHUNK_WEIGHT * penalty_chunk
+        )
+        resource = max(0.0, min(100.0, resource))
+        deducted = int(round(settings.STAGE1_RESOURCE_PENALTY_WEIGHT * resource))
+        meta = {
+            "penalty_k": round(penalty_k, 4),
+            "penalty_chunk": round(penalty_chunk, 4),
+            "resource_penalty_raw": round(resource, 4),
+            "default_parameters": default.model_dump(),
+            "submitted_parameters": submitted.model_dump(),
+            "k_scale": k_scale,
+            "chunk_scale": chunk_scale,
+        }
+        return deducted, meta
+
+    def _build_evaluation_report(
+        self,
+        *,
+        is_correct: bool,
+        correct_score: int,
+        resource_penalty: int,
+    ) -> Stage1EvaluationReport:
+        if is_correct and resource_penalty == 0:
+            feedback = "정답입니다. 기본 파라미터 근처에서 잘 해결했습니다."
+        elif is_correct and resource_penalty > 0:
+            feedback = (
+                f"정답입니다. 다만 기본값보다 검색 자원을 많이 써서 "
+                f"{resource_penalty}점이 감점되었습니다."
+            )
+        elif not is_correct and resource_penalty > 0:
+            feedback = (
+                "오답입니다. 파라미터를 조절해 자료에서 근거를 더 찾아보세요. "
+                f"(기본값보다 자원을 많이 써서 {resource_penalty}점도 감점되었습니다.)"
+            )
+        else:
+            feedback = (
+                "오답입니다. AI와 대화하며 파라미터를 조절해 "
+                "자료에서 근거를 찾아 다시 제출해 보세요."
+            )
+        return Stage1EvaluationReport(
+            is_correct=is_correct,
+            correct_score=correct_score,
+            resource_penalty=resource_penalty,
+            feedback=feedback,
+        )
 
     @staticmethod
     def _chunk_size_from_metadata(metadata: dict | None) -> int | None:
@@ -569,12 +738,6 @@ class AssignmentService:
         requested_chunk_size: int,
         default_chunk_size: int,
     ) -> list[tuple[str, list[float]]] | None:
-        """저장된 청크 중 요청 chunk_size와 맞는 벡터만 골라 재사용한다.
-
-        - metadata.chunk_size == 요청값
-        - metadata에 chunk_size가 없으면 default_chunk_size == 요청값일 때 허용
-        """
-
         matched: list[tuple[str, list[float]]] = []
         for row in rows:
             if not row.content:
@@ -599,8 +762,6 @@ class AssignmentService:
         requested_chunk_size: int,
         default_chunk_size: int,
     ) -> list[tuple[str, list[float]]]:
-        """동일 chunk_size면 DB 임베딩 재사용, 다르면 실시간 청킹·임베딩."""
-
         stored = await self.chunk_repository.get_by_document_id(document.document_id)
         reused = self._reusable_chunk_vectors_from_db(
             stored,
@@ -608,11 +769,6 @@ class AssignmentService:
             default_chunk_size=default_chunk_size,
         )
         if reused is not None:
-            logger.debug(
-                "stage1 chat: reusing %s stored chunks (chunk_size=%s)",
-                len(reused),
-                requested_chunk_size,
-            )
             return reused
 
         raw_text = document.raw_text or ""
@@ -628,12 +784,9 @@ class AssignmentService:
         *,
         message: str,
         top_k: int,
+        chunk_size: int,
+        document_text: str = "",
     ) -> tuple[str, RagProcessVisualization]:
-        """질문 임베딩 + cosine 정렬 후 top_k context/visualization 조립.
-
-        temperature는 사용하지 않는다.
-        """
-
         query_embedding = await embed_text(message)
         ranked: list[tuple[float, str]] = []
         for text, emb in chunk_vectors:
@@ -642,149 +795,17 @@ class AssignmentService:
         ranked.sort(key=lambda item: item[0], reverse=True)
 
         selected = ranked[:top_k]
-        context = "\n\n".join(text for _, text in selected)
+        raw_chunks = [text.strip() for _, text in selected if text.strip()]
+        # Langflow에는 실제 검색 청크, UI에는 문장처럼 정리한 참고문
+        context = "\n\n".join(raw_chunks)
+        previews = format_stage1_topk_sentences(raw_chunks, document_text)
         best_score = selected[0][0] if selected else 0.0
+        approx_chars = sum(len(p) for p in raw_chunks) or (top_k * chunk_size)
         visualization = RagProcessVisualization(
             total_chunks=len(chunk_vectors),
             retrieved_chunks=len(selected),
             vector_search_score=round(best_score, 4),
+            retrieved_chunk_previews=previews,
+            approx_context_chars=approx_chars,
         )
         return context, visualization
-
-    async def _evaluate_response(
-        self,
-        *,
-        selected_ai_response: str,
-        source_text: str,
-        question: str = "",
-    ) -> tuple[Stage1EvaluationReport, int]:
-        """하이브리드 채점(C).
-
-        1) 원문 토큰 겹침으로 faithfulness / relevance 점수 산출
-        2) OpenAI로 학습용 feedback 문장 생성 (키 없거나 실패 시 템플릿 fallback)
-        """
-
-        faithfulness, relevance, current_score, template_feedback = (
-            self._score_against_source(
-                selected_ai_response=selected_ai_response,
-                source_text=source_text,
-            )
-        )
-        feedback = await self._generate_ai_feedback(
-            question=question,
-            selected_ai_response=selected_ai_response,
-            source_text=source_text,
-            faithfulness=faithfulness,
-            relevance=relevance,
-            fallback=template_feedback,
-        )
-        report = Stage1EvaluationReport(
-            faithfulness_score=faithfulness,
-            relevance_score=relevance,
-            feedback=feedback,
-        )
-        return report, current_score
-
-    def _score_against_source(
-        self, *, selected_ai_response: str, source_text: str
-    ) -> tuple[int, int, int, str]:
-        response_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", selected_ai_response))
-        source_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", source_text))
-        if not response_tokens:
-            return (
-                1,
-                1,
-                20,
-                "답변 내용이 거의 없어 평가가 어렵습니다. 자료에 근거한 설명을 더 채워보세요.",
-            )
-
-        overlap = response_tokens & source_tokens
-        overlap_ratio = len(overlap) / max(len(response_tokens), 1)
-        coverage = len(overlap) / max(len(source_tokens), 1) if source_tokens else 0.0
-
-        faithfulness = max(1, min(5, round(overlap_ratio * 5)))
-        relevance = max(
-            1,
-            min(5, round((0.6 * overlap_ratio + 0.4 * min(1.0, coverage * 20)) * 5)),
-        )
-        current_score = int(round(((faithfulness + relevance) / 10) * 100))
-
-        if faithfulness <= 2:
-            feedback = (
-                "질문에서 요구한 핵심 내용은 일부 포함되었으나, 원본 교재에 없는 내용이 섞여 있을 수 "
-                "있습니다. AI가 주어진 문서에만 집중하게 만들려면 temperature를 낮추거나 top_k를 "
-                "조절해 보세요."
-            )
-        elif faithfulness >= 4:
-            feedback = (
-                "검색된 자료와의 일치도가 높고 관련 정보도 잘 담겼습니다. "
-                "지금의 파라미터 조합을 기억해 두면 도움이 됩니다."
-            )
-        else:
-            feedback = (
-                "핵심 내용은 대체로 맞지만 일부 표현이 자료와 어긋날 수 있습니다. "
-                "chunk_size·top_k·temperature를 바꿔 보며 원문에 더 가까운 답을 찾아보세요."
-            )
-        return faithfulness, relevance, current_score, feedback
-
-    async def _generate_ai_feedback(
-        self,
-        *,
-        question: str,
-        selected_ai_response: str,
-        source_text: str,
-        faithfulness: int,
-        relevance: int,
-        fallback: str,
-    ) -> str:
-        if not settings.OPENAI_API_KEY:
-            return fallback
-
-        source_preview = (source_text or "")[:1800]
-        answer_preview = (selected_ai_response or "")[:1200]
-        prompt = (
-            "당신은 AI 리터러시 교육용 채점 조교입니다. "
-            "학생이 파라미터(chunk_size, top_k, temperature)를 조절해 문서 기반 답을 찾는 과제입니다.\n"
-            "아래 점수(1~5)와 원문·답변을 보고, 학생이 다음에 무엇을 바꿀지 한국어로 2~3문장 피드백하세요. "
-            "숫자 점수만 반복하지 말고, temperature/top_k/chunk_size 중 조절 힌트를 포함하세요.\n\n"
-            f"질문: {question or '(없음)'}\n"
-            f"faithfulness(원문 충실): {faithfulness}/5\n"
-            f"relevance(관련성): {relevance}/5\n"
-            f"원문 일부:\n{source_preview}\n\n"
-            f"학생 선택 답변:\n{answer_preview}\n"
-        )
-
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": settings.OPENAI_CHAT_MODEL,
-                        "temperature": 0.3,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "한국어로 짧고 친절한 학습 피드백만 출력하세요.",
-                            },
-                            {"role": "user", "content": prompt},
-                        ],
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-            content = (
-                data.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-                .strip()
-            )
-            return content or fallback
-        except Exception:  # noqa: BLE001
-            logger.exception("stage1 AI feedback generation failed; using template")
-            return fallback

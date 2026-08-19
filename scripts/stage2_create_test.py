@@ -14,6 +14,14 @@ BASE = "/api/v1"
 ROOT = os.getenv("TEST_BASE_URL", "http://localhost:8000")
 TEACHER_CODE = os.getenv("TEACHER_SIGNUP_CODE", "TEACHER_SECRET_CODE")
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "stage2_doc.txt"
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.services.stage2_response_validation import (  # noqa: E402
+    Stage2E2EValidationError,
+    validate_stage2_create_response,
+)
 
 
 def fail(msg: str) -> None:
@@ -71,7 +79,7 @@ def main() -> None:
                 "hallucination_types": json.dumps(
                     ["PERSONA_BIAS", "RETRIEVAL_ERROR"], ensure_ascii=False
                 ),
-                "expected_error_count": "2",
+                "expected_error_count": "1",
             },
             files={"file": ("stage2_doc.txt", doc, "text/plain")},
             timeout=60.0,
@@ -83,21 +91,17 @@ def main() -> None:
         fail("expected 201 Created")
 
     body = response.json()
-    for key in (
-        "assignment_id",
-        "title",
-        "question",
-        "flawed_ai_response",
-        "expected_error_count",
-        "generated_errors",
-    ):
-        if key not in body:
-            fail(f"missing response key: {key}")
-
-    if body["expected_error_count"] != 2:
-        fail("expected_error_count mismatch")
-    if len(body["generated_errors"]) < 1:
-        fail("generated_errors empty")
+    allowed_types = {"PERSONA_BIAS", "RETRIEVAL_ERROR"}
+    document_text = FIXTURE.read_text(encoding="utf-8")
+    try:
+        validate_stage2_create_response(
+            body,
+            expected_error_count=1,
+            allowed_types=allowed_types,
+            document_text=document_text,
+        )
+    except Stage2E2EValidationError as exc:
+        fail(str(exc))
 
     print("OK stage2 create")
     print(f"assignment_id={body['assignment_id']}")

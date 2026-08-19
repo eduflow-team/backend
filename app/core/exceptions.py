@@ -211,6 +211,13 @@ class InvalidStage1CreateError(DomainException):
     default_message = "필수 파라미터(문서 파일, 질문 등)가 누락되었습니다."
 
 
+class InvalidAssignmentDueAtError(DomainException):
+    """과제 마감일이 없거나 과거 시각일 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "마감일은 현재 시각 이후여야 합니다."
+
+
 class UnsupportedStage1FileTypeError(DomainException):
     """지원하지 않는 문서 형식으로 1단계 과제를 생성할 때 발생 (415)."""
 
@@ -320,6 +327,20 @@ class Stage2CorrectionAlreadySubmittedError(DomainException):
     default_message = "이미 최종 정답을 제출하여 더 이상 수정할 수 없습니다."
 
 
+class Stage2ReferenceDocumentNotFoundError(DomainException):
+    """2단계 참고 문서 파일이 없거나 읽을 수 없을 때 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "참고 문서를 찾을 수 없습니다."
+
+
+class Stage1DocumentNotFoundError(DomainException):
+    """1단계 학습 자료 원본 파일이 없거나 읽을 수 없을 때 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "학습 자료를 찾을 수 없습니다."
+
+
 class Stage1LangflowServiceUnavailableError(DomainException):
     """Langflow 1단계 RAG chat 생성 장애·타임아웃 시 발생 (503)."""
 
@@ -394,3 +415,69 @@ class InvalidStage3SubmitError(DomainException):
 
     status_code = status.HTTP_400_BAD_REQUEST
     default_message = "제출 데이터가 누락되었거나 형식이 올바르지 않습니다."
+
+
+class Stage2SetNotFoundError(DomainException):
+    """존재하지 않는 Stage2 세트를 조회·배포할 때 발생 (404)."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_message = "존재하지 않는 세트입니다."
+
+
+class InvalidStage2SetError(DomainException):
+    """세트 배포 요청이 유효하지 않을 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "세트 배포 요청이 올바르지 않습니다."
+
+
+class Stage4AccessForbiddenError(DomainException):
+    """4단계 과제 API에 대한 role/학급 접근이 허용되지 않을 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "해당 4단계 과제에 접근할 권한이 없습니다."
+
+
+class InvalidStage4CreateError(DomainException):
+    """4단계 생성/채팅 입력 데이터가 누락되었거나 형식이 올바르지 않을 때 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "4단계 요청 데이터 형식이 올바르지 않습니다."
+
+
+class Stage4LangflowServiceUnavailableError(DomainException):
+    """Langflow 4단계 생성 장애·타임아웃 시 발생 (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_message = (
+        "AI 답변 생성 서비스에 일시적 장애가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    )
+
+
+class Stage4SubmitLimitExceededError(DomainException):
+    """4단계 chat 시도 횟수를 모두 소진했을 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "최대 시도 횟수를 모두 소진하여 더 이상 시도할 수 없습니다."
+
+
+class Stage4ReportNotAvailableError(DomainException):
+    """4단계 보고서 제출 조건(클리어)이 충족되지 않을 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "공격이 성공(클리어)된 이후에만 보고서를 제출할 수 있습니다."
+
+
+class Stage4ReportAlreadySubmittedError(DomainException):
+    """4단계 보고서가 이미 최종 제출되었을 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "이미 보고서를 제출하여 더 이상 제출할 수 없습니다."
+
+
+class Stage4SubmitReportFieldsMissingError(DomainException):
+    """4단계 보고서 제출에 필수 항목이 누락된 경우 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "보고서 필수 항목이 누락되었습니다."
+
