@@ -9,6 +9,7 @@ from app.schemas.notices import (
     TeacherNoticeCreateRequest,
     TeacherNoticeCreateResponse,
     TeacherNoticeDeleteResponse,
+    TeacherNoticeListResponse,
 )
 from app.services.notice_service import NoticeService
 
@@ -33,6 +34,26 @@ async def get_student_notices(
     db: AsyncSession = Depends(get_db),
 ) -> StudentNoticeListResponse:
     return await NoticeService(db).get_student_notices(user_id, page=page, size=size)
+
+
+@router.get(
+    "/teacher/notices",
+    summary="교사 공지사항 목록",
+    status_code=status.HTTP_200_OK,
+    response_model=TeacherNoticeListResponse,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        403: {"model": ErrorDetail, "description": "role ≠ TEACHER"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def get_teacher_notices(
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    size: int = Query(10, ge=1, le=100, description="페이지당 개수"),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> TeacherNoticeListResponse:
+    return await NoticeService(db).get_teacher_notices(user_id, page=page, size=size)
 
 
 @router.post(

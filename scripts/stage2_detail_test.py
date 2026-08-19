@@ -73,7 +73,7 @@ def main() -> None:
                 "hallucination_types": json.dumps(
                     ["PERSONA_BIAS", "RETRIEVAL_ERROR"], ensure_ascii=False
                 ),
-                "expected_error_count": "2",
+                "expected_error_count": "1",
             },
             files={"file": ("stage2_doc.txt", doc, "text/plain")},
             timeout=60.0,
@@ -125,7 +125,7 @@ def main() -> None:
         fail("flawed_ai_response empty")
     if len(body["hallucination_type_options"]) != 3:
         fail("hallucination_type_options must be 3")
-    if body["expected_error_count"] != 2:
+    if body["expected_error_count"] != 1:
         fail("expected_error_count mismatch")
     if body["highlight_phase_complete"] is not False:
         fail("highlight_phase_complete should be false initially")

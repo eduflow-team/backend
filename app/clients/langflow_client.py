@@ -1,6 +1,7 @@
 """Langflow HTTP 클라이언트.
 
-`LANGFLOW_STAGE*_FLOW_ID`가 비어 있으면 mock 응답을 반환한다.
+Stage1: Flow ID·노드 ID 없으면 503 (mock 없음).
+Stage2: Flow ID가 비어 있으면 mock 응답을 반환한다.
 """
 
 from __future__ import annotations
@@ -8,9 +9,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
 
 import httpx
+from pydantic import ValidationError
 
 from app.core.config import settings
 from app.core.exceptions import (
@@ -18,14 +19,66 @@ from app.core.exceptions import (
     Stage2LangflowServiceUnavailableError,
     Stage4LangflowServiceUnavailableError,
 )
+from app.schemas.stage2_generation import (
+    Stage2GeneratedErrorDraft,
+    Stage2LangflowGenerationResult,
+    Stage2RetrievalInput,
+    parse_stage2_langflow_generation_result,
+)
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class Stage2LangflowResult:
-    flawed_ai_response: str
-    generated_errors: list[dict]
+# Backward-compatible alias; canonical type lives in stage2_generation.
+Stage2LangflowResult = Stage2LangflowGenerationResult
+
+_EMPTY_STAGE2_RETRIEVAL_INPUT = Stage2RetrievalInput(candidate_chunks=[])
+
+
+def serialize_stage2_retrieval_input(retrieval_input: Stage2RetrievalInput) -> str:
+    """Langflow Planner(`Prompt-We0Ob`)의 candidate_chunks tweak 값."""
+    return json.dumps(retrieval_input.model_dump(mode="json"), ensure_ascii=False)
+
+
+def build_stage2_langflow_tweaks(
+    *,
+    gen_prompt_node_id: str,
+    planner_prompt_node_id: str,
+    document_text: str,
+    question: str,
+    persona: str,
+    hallucination_types: list[str],
+    expected_error_count: int,
+    retrieval_input: Stage2RetrievalInput | None = None,
+    validation_feedback: str = "",
+) -> dict[str, dict[str, str]]:
+    """Stage 2 plan-first Flow tweaks payload (contract v2)."""
+    if retrieval_input is None:
+        retrieval_input = _EMPTY_STAGE2_RETRIEVAL_INPUT
+
+    types_str = ",".join(hallucination_types)
+    count_str = str(expected_error_count)
+    shared = {
+        "document_text": document_text,
+        "hallucination_types": types_str,
+        "expected_error_count": count_str,
+    }
+    gen_tweak = {
+        **shared,
+        "question": question,
+        "persona": persona,
+    }
+    planner_tweak = {
+        **shared,
+        "question": question,
+        "persona": persona,
+        "candidate_chunks": serialize_stage2_retrieval_input(retrieval_input),
+        "validation_feedback": validation_feedback,
+    }
+    return {
+        gen_prompt_node_id: gen_tweak,
+        planner_prompt_node_id: planner_tweak,
+    }
 
 
 class LangflowClient:
@@ -36,13 +89,9 @@ class LangflowClient:
         context: str,
         temperature: float,
     ) -> str:
-        if settings.LANGFLOW_STAGE1_CHAT_FLOW_ID.strip():
-            return await self._run_stage1_http(
-                message=message,
-                context=context,
-                temperature=temperature,
-            )
-        return self._mock_stage1_chat(
+        if not settings.LANGFLOW_STAGE1_CHAT_FLOW_ID.strip():
+            raise Stage1LangflowServiceUnavailableError()
+        return await self._run_stage1_http(
             message=message,
             context=context,
             temperature=temperature,
@@ -103,39 +152,6 @@ class LangflowClient:
                     texts.append(message)
         return texts[-1].strip() if texts else ""
 
-    def _mock_stage1_chat(
-        self, *, message: str, context: str, temperature: float
-    ) -> str:
-        """Langflow Flow ID 미설정 시 placeholder."""
-
-        snippets = [s.strip() for s in re.split(r"\n{2,}", context) if s.strip()]
-        base_parts = (
-            snippets[:3]
-            if snippets
-            else ["제공된 학습 자료에서 관련 내용을 찾지 못했습니다."]
-        )
-        lines = [
-            f"질문('{message}')에 대해 검색된 자료를 바탕으로 답변합니다.",
-            *base_parts,
-        ]
-        fillers = [
-            "위 내용은 검색된 청크를 중심으로 정리한 것입니다.",
-            "파라미터가 달라지면 검색 범위와 답변 톤도 함께 달라질 수 있습니다.",
-            "학습 자료에 나온 사실을 우선적으로 언급했습니다.",
-            "학생이 이해하기 쉬운 문장으로 풀어 썼습니다.",
-            "추가 질문은 같은 자료 범위에서 다시 검색할 수 있습니다.",
-            "자료에 없는 세부 일화는 온도가 높을 때 더 쉽게 섞일 수 있습니다.",
-            "실제 운영에서는 Langflow가 이 구간을 생성합니다.",
-        ]
-        while len(lines) < 10:
-            lines.append(fillers[(len(lines) - 1) % len(fillers)])
-
-        if temperature >= 0.7:
-            lines.append(
-                "참고로 자료에 직접 나오지 않은 배경 이야기도 섞어 설명할 수 있습니다. "
-                "(고온 mock)"
-            )
-        return "\n".join(lines)
 
     async def run_stage2_hallucination(
         self,
@@ -145,6 +161,8 @@ class LangflowClient:
         persona: str,
         hallucination_types: list[str],
         expected_error_count: int,
+        retrieval_input: Stage2RetrievalInput | None = None,
+        validation_feedback: str = "",
     ) -> Stage2LangflowResult:
         if settings.LANGFLOW_STAGE2_FLOW_ID.strip():
             return await self._run_stage2_http(
@@ -153,6 +171,8 @@ class LangflowClient:
                 persona=persona,
                 hallucination_types=hallucination_types,
                 expected_error_count=expected_error_count,
+                retrieval_input=retrieval_input,
+                validation_feedback=validation_feedback,
             )
         return self._mock_stage2_hallucination(
             document_text=document_text,
@@ -266,29 +286,27 @@ class LangflowClient:
         persona: str,
         hallucination_types: list[str],
         expected_error_count: int,
+        retrieval_input: Stage2RetrievalInput | None = None,
+        validation_feedback: str = "",
     ) -> Stage2LangflowResult:
         gen_prompt_node_id = settings.LANGFLOW_STAGE2_GEN_PROMPT_NODE_ID.strip()
-        ext_prompt_node_id = settings.LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID.strip()
-        if not gen_prompt_node_id or not ext_prompt_node_id:
+        planner_prompt_node_id = settings.LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID.strip()
+        if not gen_prompt_node_id or not planner_prompt_node_id:
             raise Stage2LangflowServiceUnavailableError()
 
-        types_str = ", ".join(hallucination_types)
-        count_str = str(expected_error_count)
-        shared = {
-            "document_text": document_text,
-            "hallucination_types": types_str,
-            "expected_error_count": count_str,
-        }
         payload = {
             "input_value": "",
-            "tweaks": {
-                gen_prompt_node_id: {
-                    **shared,
-                    "question": question,
-                    "persona": persona,
-                },
-                ext_prompt_node_id: shared,
-            },
+            "tweaks": build_stage2_langflow_tweaks(
+                gen_prompt_node_id=gen_prompt_node_id,
+                planner_prompt_node_id=planner_prompt_node_id,
+                document_text=document_text,
+                question=question,
+                persona=persona,
+                hallucination_types=hallucination_types,
+                expected_error_count=expected_error_count,
+                retrieval_input=retrieval_input,
+                validation_feedback=validation_feedback,
+            ),
         }
         url = (
             f"{settings.LANGFLOW_URL.rstrip('/')}"
@@ -310,35 +328,72 @@ class LangflowClient:
         return self._parse_stage2_outputs(data)
 
     def _parse_stage2_outputs(self, data: dict) -> Stage2LangflowResult:
+        texts = self._collect_stage2_output_texts(data)
+        flawed_text, raw_errors = self._split_stage2_output_texts(texts)
+
+        if not flawed_text:
+            raise Stage2LangflowServiceUnavailableError()
+
+        try:
+            return parse_stage2_langflow_generation_result(
+                flawed_ai_response=flawed_text,
+                raw_errors=raw_errors,
+            )
+        except ValidationError as exc:
+            logger.exception("stage2 langflow output validation failed")
+            raise Stage2LangflowServiceUnavailableError() from exc
+
+    @staticmethod
+    def _collect_stage2_output_texts(data: dict) -> list[str]:
         texts: list[str] = []
         for run_output in data.get("outputs", []):
             for inner in run_output.get("outputs", []):
                 results = inner.get("results", {})
                 message = results.get("message") or results.get("text")
                 if isinstance(message, dict) and message.get("text"):
-                    texts.append(message["text"])
+                    texts.append(str(message["text"]))
                 elif isinstance(message, str):
                     texts.append(message)
+        return texts
 
-        if not texts:
-            raise Stage2LangflowServiceUnavailableError()
+    @staticmethod
+    def _split_stage2_output_texts(texts: list[str]) -> tuple[str, list]:
+        raw_errors: list = []
+        flawed_candidates: list[str] = []
 
-        flawed = _strip_markdown(texts[0])
-        errors: list[dict] = []
-        if len(texts) > 1:
-            raw = texts[1].strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        for text in texts:
+            stripped = text.strip()
+            if not stripped:
+                continue
+            parsed_errors = LangflowClient._try_parse_generated_errors(stripped)
+            if parsed_errors is not None:
+                if len(parsed_errors) >= len(raw_errors):
+                    raw_errors = parsed_errors
+                continue
+            flawed_candidates.append(_strip_markdown(stripped))
+
+        flawed_text = ""
+        if flawed_candidates:
+            flawed_text = max(flawed_candidates, key=len)
+        return flawed_text, raw_errors
+
+    @staticmethod
+    def _try_parse_generated_errors(text: str) -> list | None:
+        raw = text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        if not raw.startswith("{") and not raw.startswith("["):
+            return None
+        try:
             parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                errors = parsed.get("generated_errors", [])
-            elif isinstance(parsed, list):
-                errors = parsed
-
-        return Stage2LangflowResult(
-            flawed_ai_response=flawed,
-            generated_errors=errors,
-        )
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            errors = parsed.get("generated_errors")
+            return errors if isinstance(errors, list) else None
+        if isinstance(parsed, list):
+            return parsed
+        return None
 
     def _mock_stage2_hallucination(
         self,
@@ -396,7 +451,7 @@ class LangflowClient:
             },
         ]
 
-        errors: list[dict] = []
+        errors: list[Stage2GeneratedErrorDraft] = []
         for index in range(expected_error_count):
             item = dict(templates[index % len(templates)])
             if index == 1:
@@ -409,9 +464,9 @@ class LangflowClient:
             end = start + len(str(item["error_sentence"]))
             item["start_index"] = start
             item["end_index"] = end
-            errors.append(item)
+            errors.append(Stage2GeneratedErrorDraft.model_validate(item))
 
-        return Stage2LangflowResult(
+        return Stage2LangflowGenerationResult(
             flawed_ai_response=flawed,
             generated_errors=errors,
         )

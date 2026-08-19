@@ -82,7 +82,9 @@ class DashboardService:
 
         assignments: list[Assignment] = []
         if user.class_id is not None:
-            assignments = await self.assignment_repository.list_by_class(user.class_id)
+            assignments = await self.assignment_repository.list_published_by_class(
+                user.class_id
+            )
 
         statuses = await self.student_status_repository.list_by_user(user_id)
         status_by_assignment_id = {s.assignment_id: s for s in statuses}
