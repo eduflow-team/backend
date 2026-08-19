@@ -52,6 +52,9 @@ from app.schemas.stage3 import (
     Stage3FactcheckRequest,
     Stage3FactcheckResponse,
     Stage3GradeRow,
+    Stage3SourceItem,
+    Stage3SourcesRequest,
+    Stage3SourcesResponse,
     Stage3Speaker,
     Stage3SubmitRequest,
     Stage3SubmitResponse,
@@ -63,6 +66,7 @@ from app.services.stage3_debate import (
     public_turns,
     resolve_checked_turn_ids,
 )
+from app.services.stage3_sources import search_sources
 
 logger = logging.getLogger(__name__)
 
@@ -253,12 +257,17 @@ class Stage3Service:
             question=question,
             mode=detail.debate_mode or "v2",
         )
-        debate_payload = build_turns(
-            [
+        speeches = langflow_result.speeches or {}
+        if speeches:
+            rounds = [{"role": role, "text": text} for role, text in speeches.items() if text]
+        else:
+            rounds = [
                 {"role": "pro", "text": langflow_result.pro_argument},
                 {"role": "con", "text": langflow_result.con_argument},
                 {"role": "rebut", "text": langflow_result.rebuttal_argument},
-            ],
+            ]
+        debate_payload = build_turns(
+            rounds,
             langflow_result.fact_check,
             topic=detail.topic,
             pro_role=detail.pro_persona,
@@ -348,6 +357,52 @@ class Stage3Service:
             verdict=str(turn.get("verdict") or "supported"),
             why=str(turn.get("why") or ""),
             claims=claims,
+        )
+
+    async def lookup_sources(
+        self,
+        user_id: int,
+        assignment_id: int,
+        payload: Stage3SourcesRequest,
+    ) -> Stage3SourcesResponse:
+        student = await self._get_authorized_student(user_id)
+        _assignment, detail = await self._get_stage3_assignment_for_student(
+            student, assignment_id
+        )
+        claim = payload.claim or ""
+        text = payload.text or ""
+        if payload.turn_id:
+            attempts = await self.attempt_repository.list_by_user_and_assignment(
+                student.user_id, assignment_id
+            )
+            in_progress = self._latest_in_progress(attempts)
+            turns = (in_progress.debate_payload or {}).get("turns") or [] if in_progress else []
+            turn = next((item for item in turns if item.get("id") == payload.turn_id), None)
+            if turn:
+                claim = claim or str(turn.get("claim") or "")
+                text = text or str(turn.get("text") or "")
+        try:
+            raw = await search_sources(detail.topic, claim, text)
+        except Exception:
+            logger.exception("stage3 source lookup failed")
+            q = (detail.topic or claim or "교육 AI")[:80]
+            raw = {
+                "query": detail.topic,
+                "articles": [],
+                "searches": [
+                    {
+                        "title": f"'{q}' Google 뉴스",
+                        "url": f"https://news.google.com/search?q={q}&hl=ko&gl=KR&ceid=KR:ko",
+                        "source": "Google 뉴스",
+                        "published": "",
+                        "kind": "검색",
+                    }
+                ],
+            }
+        return Stage3SourcesResponse(
+            query=str(raw.get("query") or detail.topic),
+            articles=[Stage3SourceItem(**item) for item in raw.get("articles") or []],
+            searches=[Stage3SourceItem(**item) for item in raw.get("searches") or []],
         )
 
     # ------------------------------------------------------------------

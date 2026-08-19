@@ -150,6 +150,34 @@ class Stage3FactcheckRequest(BaseModel):
         return stripped
 
 
+class Stage3SourcesRequest(BaseModel):
+    claim: str | None = None
+    text: str | None = None
+    turn_id: str | None = None
+
+    @field_validator("claim", "text", "turn_id")
+    @classmethod
+    def strip_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+class Stage3SourceItem(BaseModel):
+    title: str
+    url: str
+    source: str = ""
+    published: str = ""
+    kind: str = "뉴스"
+
+
+class Stage3SourcesResponse(BaseModel):
+    query: str
+    articles: list[Stage3SourceItem] = Field(default_factory=list)
+    searches: list[Stage3SourceItem] = Field(default_factory=list)
+
+
 class Stage3FactcheckResponse(BaseModel):
     turn_id: str
     verdict: str

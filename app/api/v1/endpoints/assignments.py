@@ -32,6 +32,8 @@ from app.schemas.stage3 import (
     Stage3DebateResponse,
     Stage3FactcheckRequest,
     Stage3FactcheckResponse,
+    Stage3SourcesRequest,
+    Stage3SourcesResponse,
     Stage3SubmitRequest,
     Stage3SubmitResponse,
 )
@@ -455,6 +457,26 @@ async def factcheck_step3_turn(
     db: AsyncSession = Depends(get_db),
 ) -> Stage3FactcheckResponse:
     return await Stage3Service(db).factcheck_turn(user_id, id, payload)
+
+
+@router.post(
+    "/student/assignments/{id}/step3/sources",
+    summary="3단계 근거 출처(뉴스·인터뷰) 검색",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage3SourcesResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def lookup_step3_sources(
+    id: int,
+    payload: Stage3SourcesRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage3SourcesResponse:
+    return await Stage3Service(db).lookup_sources(user_id, id, payload)
 
 
 @router.post(

@@ -9,7 +9,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -90,6 +90,7 @@ class Stage3LangflowResult:
     fact_check: dict
     fact_check_raw: str
     rebuttal_argument: str = ""
+    speeches: dict[str, str] = field(default_factory=dict)
     source: str = "mock"
 
 
@@ -107,6 +108,18 @@ class Stage3LangflowClient:
         debate_mode = (mode or "v2").strip().lower()
         if debate_mode not in {"v1", "v2"}:
             debate_mode = "v2"
+
+        if debate_mode == "v2":
+            v1_id = await self._resolve_flow_id("v1")
+            if v1_id:
+                return await self._run_six_round(
+                    topic=topic,
+                    pro_persona=pro_persona,
+                    con_persona=con_persona,
+                    fact_persona=fact_persona,
+                    question=question,
+                    flow_id=v1_id,
+                )
 
         flow_id = await self._resolve_flow_id(debate_mode)
         if flow_id:
@@ -167,6 +180,208 @@ class Stage3LangflowClient:
             if isinstance(item, dict) and item.get("endpoint_name") == endpoint:
                 return str(item.get("id") or "")
         return ""
+
+    @staticmethod
+    def _agent_sys(side: str, persona: str, duty: str, *, heading: str) -> str:
+        label = "찬성" if side == "pro" else "반대"
+        other = "반대" if side == "pro" else "찬성"
+        return f"""당신은 EduFlow 3단계 토론의 **{label} 에이전트**입니다.
+역할/성격: {persona}
+
+지금 할 일: {duty}
+
+규칙:
+1. {label} 입장만 말하세요. {other} 입장을 취하지 마세요.
+2. 근거 2~3개를 제시하되, 과장·허위 사실을 섞을 수 있습니다(학생이 팩트체크하도록).
+3. 상대 발언을 인용할 때는 한 문장만 짧게 인용하세요.
+4. 중·고등학생이 이해할 수 있는 한국어로, 아래 형식으로만 답하세요:
+【{heading}】
+주장 요약: ...
+핵심 근거:
+1. ...
+2. ...
+마무리: ...
+"""
+
+    @staticmethod
+    def _hold_sys(side: str, persona: str) -> str:
+        label = "찬성" if side == "pro" else "반대"
+        return f"""당신은 EduFlow 3단계 토론의 **{label} 에이전트**입니다.
+역할/성격: {persona}
+지금은 당신 차례가 아닙니다. 아래 형식만 출력하세요.
+【{label} 입장】
+주장 요약: (이번 차례 아님)
+핵심 근거:
+1. (없음)
+마무리: 없음
+"""
+
+    async def _post_run(self, flow_id: str, payload: dict) -> dict:
+        url = f"{settings.LANGFLOW_URL.rstrip('/')}/api/v1/run/{flow_id}"
+        headers = {"Content-Type": "application/json"}
+        if settings.LANGFLOW_API_KEY:
+            headers["x-api-key"] = settings.LANGFLOW_API_KEY
+        try:
+            async with httpx.AsyncClient(timeout=240.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as exc:
+            logger.exception("stage3 langflow HTTP failed")
+            raise Stage3LangflowServiceUnavailableError() from exc
+
+    async def _run_v1_outputs(self, flow_id: str, input_value: str, tweaks: dict) -> dict[str, str]:
+        payload = {
+            "input_value": input_value,
+            "input_type": "chat",
+            "output_type": "chat",
+            "session_id": str(uuid.uuid4()),
+            "tweaks": tweaks,
+        }
+        data = await self._post_run(flow_id, payload)
+        return self._collect_outputs_by_component_id(data)
+
+    async def _run_six_round(
+        self,
+        *,
+        topic: str,
+        pro_persona: str,
+        con_persona: str,
+        fact_persona: str,
+        question: str | None,
+        flow_id: str,
+    ) -> Stage3LangflowResult:
+        from app.services.stage3_debate import merge_facts, parse_fact_json
+
+        extra = f"\n학생 질문: {question.strip()}" if question and question.strip() else ""
+        pro_id = settings.LANGFLOW_STAGE3_PRO_AGENT_ID.strip() or "LM-s3pro"
+        con_id = settings.LANGFLOW_STAGE3_CON_AGENT_ID.strip() or "LM-s3con"
+
+        def need(out: dict[str, str], node: str, label: str) -> str:
+            text = (out.get(node) or "").strip()
+            if not text or "(이번 차례 아님)" in text:
+                raise Stage3LangflowServiceUnavailableError(
+                    f"Langflow가 {label} 발언을 비워 두었습니다."
+                )
+            return text
+
+        out1 = await self._run_v1_outputs(
+            flow_id,
+            f"논제: {topic}\n찬성 측 페르소나: {pro_persona}\n반대 측 페르소나: {con_persona}{extra}\n지금은 입론입니다.",
+            {
+                pro_id: {
+                    "system_message": self._agent_sys(
+                        "pro",
+                        pro_persona,
+                        "찬성 측 입론을 하세요. 논제를 정의하고, 배경을 짧게 설명한 뒤, 주요 주장과 근거를 제시하세요.",
+                        heading="찬성 측 입론",
+                    )
+                },
+                con_id: {
+                    "system_message": self._agent_sys(
+                        "con",
+                        con_persona,
+                        "반대 측 입론을 하세요. 반대 입장의 주요 주장과 근거를 제시하세요. 찬성 측을 인용하지 마세요.",
+                        heading="반대 측 입론",
+                    )
+                },
+            },
+        )
+        pro_open = need(out1, "ChatOutput-s3pro", "찬성 측 입론")
+        con_open = need(out1, "ChatOutput-s3con", "반대 측 입론")
+        fact1 = parse_fact_json(out1.get("ChatOutput-s3fact", ""))
+
+        out2 = await self._run_v1_outputs(
+            flow_id,
+            (
+                f"논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
+                f"【입론 · 반대 측】\n{con_open}\n\n지금은 반론입니다. 반대 에이전트만 발언하세요."
+            ),
+            {
+                pro_id: {"system_message": self._hold_sys("pro", pro_persona)},
+                con_id: {
+                    "system_message": self._agent_sys(
+                        "con",
+                        con_persona,
+                        "반대 측 반론을 하세요. 찬성 측 입론의 허점이나 근거의 타당성을 지적하세요.",
+                        heading="반대 측 반론",
+                    )
+                },
+            },
+        )
+        con_rebut = need(out2, "ChatOutput-s3con", "반대 측 반론")
+        fact2 = parse_fact_json(out2.get("ChatOutput-s3fact", ""))
+
+        out3 = await self._run_v1_outputs(
+            flow_id,
+            (
+                f"논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
+                f"【입론 · 반대 측】\n{con_open}\n\n【반론 · 반대 측】\n{con_rebut}\n\n"
+                "지금은 반론입니다. 찬성 에이전트만 발언하세요."
+            ),
+            {
+                pro_id: {
+                    "system_message": self._agent_sys(
+                        "pro",
+                        pro_persona,
+                        "찬성 측 반론을 하세요. 반대 측 반론을 재반박하고 찬성 측 입론을 강화하세요.",
+                        heading="찬성 측 반론",
+                    )
+                },
+                con_id: {"system_message": self._hold_sys("con", con_persona)},
+            },
+        )
+        pro_rebut = need(out3, "ChatOutput-s3pro", "찬성 측 반론")
+        fact3 = parse_fact_json(out3.get("ChatOutput-s3fact", ""))
+
+        out4 = await self._run_v1_outputs(
+            flow_id,
+            (
+                f"논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
+                f"【입론 · 반대 측】\n{con_open}\n\n【반론 · 반대 측】\n{con_rebut}\n\n"
+                f"【반론 · 찬성 측】\n{pro_rebut}\n\n지금은 최종 변론입니다."
+            ),
+            {
+                pro_id: {
+                    "system_message": self._agent_sys(
+                        "pro",
+                        pro_persona,
+                        "찬성 측 최종 변론을 하세요. 핵심 쟁점을 정리하고 찬성 입장을 강조하세요. 당신이 마지막 발언입니다.",
+                        heading="찬성 측 최종 변론",
+                    )
+                },
+                con_id: {
+                    "system_message": self._agent_sys(
+                        "con",
+                        con_persona,
+                        "반대 측 최종 변론을 하세요. 핵심 쟁점을 정리하고 반대 입장을 강조하세요.",
+                        heading="반대 측 최종 변론",
+                    )
+                },
+            },
+        )
+        con_close = need(out4, "ChatOutput-s3con", "반대 측 최종 변론")
+        pro_close = need(out4, "ChatOutput-s3pro", "찬성 측 최종 변론")
+        fact4 = parse_fact_json(out4.get("ChatOutput-s3fact", ""))
+        merged = merge_facts(fact1, fact2, fact3, fact4)
+
+        speeches = {
+            "pro_open": pro_open,
+            "con_open": con_open,
+            "con_rebut": con_rebut,
+            "pro_rebut": pro_rebut,
+            "con_rerebut": con_close,
+            "pro_rerebut": pro_close,
+        }
+        return Stage3LangflowResult(
+            pro_argument=pro_open,
+            con_argument=con_open,
+            rebuttal_argument=pro_rebut,
+            fact_check=merged,
+            fact_check_raw=json.dumps(merged, ensure_ascii=False),
+            speeches=speeches,
+            source="langflow",
+        )
 
     async def _run_http(
         self,
@@ -273,6 +488,11 @@ class Stage3LangflowClient:
             rebuttal_argument=rebuttal_argument.strip(),
             fact_check=parsed_fact,
             fact_check_raw=(fact_raw or "").strip(),
+            speeches={
+                "pro_open": pro_argument.strip(),
+                "con_open": con_argument.strip(),
+                "pro_rebut": rebuttal_argument.strip(),
+            },
             source="langflow",
         )
 
@@ -337,21 +557,40 @@ class Stage3LangflowClient:
             f"2. 오탐으로 무고한 학생이 부정행위자로 몰릴 위험이 있습니다.\n"
             f"우려되는 점: 감시 문화가 교실 신뢰를 무너뜨릴 수 있습니다."
         )
-        rebuttal = ""
-        if mode == "v2":
-            rebuttal = (
-                f"【재반박】\n"
-                f"주장 요약: 동의 절차를 넣으면 '{topic}'을 도입할 수 있습니다.\n"
-                f"보강 근거:\n"
-                f"1. 감독에 쓰이던 교사의 시간을 채점과 피드백으로 돌릴 수 있습니다.\n"
-                f"2. 민감정보는 별도 동의와 최소 수집으로 관리할 수 있습니다."
-            )
+        rebuttal = (
+            f"【반론 · 찬성 측】\n"
+            f"주장 요약: 동의 절차를 넣으면 '{topic}'을 도입할 수 있습니다.\n"
+            f"핵심 근거:\n"
+            f"1. 감독에 쓰이던 교사의 시간을 채점과 피드백으로 돌릴 수 있습니다.\n"
+            f"2. 민감정보는 별도 동의와 최소 수집으로 관리할 수 있습니다."
+        )
+        con_rebut = (
+            f"【반론 · 반대 측】\n"
+            f"주장 요약: 90% 감소라는 숫자는 도입을 정당화하기에 부족합니다.\n"
+            f"핵심 근거:\n"
+            f"1. 시험이 끝난 뒤에도 얼굴 데이터가 남아 있으면 목적 외 이용 위험이 있습니다.\n"
+            f"2. 오탐으로 무고한 학생이 부정행위자로 몰릴 수 있습니다."
+        )
+        con_close = (
+            f"【최종 변론 · 반대 측】\n"
+            f"주장 요약: 동의서를 받는다고 감시가 사라지지는 않습니다.\n"
+            f"핵심 근거:\n"
+            f"1. 동의를 거부한 학생을 별도 고사장에 두면 낙인 효과가 생길 수 있습니다.\n"
+            f"2. 핵심 쟁점은 개인정보와 교실 신뢰입니다."
+        )
+        pro_close = (
+            f"【최종 변론 · 찬성 측】\n"
+            f"주장 요약: 대안 고사장을 같은 조건으로 운영하면 낙인을 줄일 수 있습니다.\n"
+            f"핵심 근거:\n"
+            f"1. 거부 학생을 위한 대안 고사장을 같은 시험 조건으로 운영할 수 있습니다.\n"
+            f"2. 마지막까지 공정성과 효율을 함께 설계하는 것이 찬성 입장입니다."
+        )
 
         fact = {
             "topic": topic,
             "pro_argument": pro[:180],
             "con_argument": con[:180],
-            "rebuttal_argument": rebuttal[:180] if rebuttal else "",
+            "rebuttal_argument": rebuttal[:180],
             "pro_claims_checked": [
                 {
                     "claim": "AI 감독은 부정행위를 90% 이상 줄인다는 연구 결과가 있습니다.",
@@ -384,7 +623,14 @@ class Stage3LangflowClient:
                 "최종 결론에 양측 근거를 균형 있게 썼는가?",
             ],
         }
-        if rebuttal:
+        if mode != "v1":
+            fact["con_claims_checked"].append(
+                {
+                    "claim": "시험이 끝난 뒤에도 얼굴 데이터가 남아 있으면 목적 외 이용 위험이 있습니다.",
+                    "verdict": "supported",
+                    "reason": "개인정보는 수집 목적 범위에서만 이용·보관해야 한다",
+                }
+            )
             fact["pro_claims_checked"].append(
                 {
                     "claim": "감독에 쓰이던 교사의 시간을 채점과 피드백으로 돌릴 수 있습니다.",
@@ -393,12 +639,27 @@ class Stage3LangflowClient:
                 }
             )
 
+        speeches = {
+            "pro_open": pro,
+            "con_open": con,
+        }
+        if mode != "v1":
+            speeches.update(
+                {
+                    "con_rebut": con_rebut,
+                    "pro_rebut": rebuttal,
+                    "con_rerebut": con_close,
+                    "pro_rerebut": pro_close,
+                }
+            )
+
         return Stage3LangflowResult(
             pro_argument=pro,
             con_argument=con,
-            rebuttal_argument=rebuttal,
+            rebuttal_argument=rebuttal if mode != "v1" else "",
             fact_check=fact,
             fact_check_raw=json.dumps(fact, ensure_ascii=False),
+            speeches=speeches,
             source="mock",
         )
 

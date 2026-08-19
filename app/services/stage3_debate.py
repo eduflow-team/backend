@@ -22,10 +22,19 @@ NEEDS_CHECK = frozenset({"exaggerated", "unsupported", "false"})
 PENALIZE_UNNECESSARY_CHECK = True
 
 ROUND_META = [
-    ("pro", "pro-1", "1라운드 · 주장"),
-    ("con", "con-1", "1라운드 · 반박"),
-    ("rebut", "pro-2", "2라운드 · 재반박"),
+    ("pro_open", "pro-1", "입론 · 찬성 측"),
+    ("con_open", "con-1", "입론 · 반대 측"),
+    ("con_rebut", "con-2", "반론 · 반대 측"),
+    ("pro_rebut", "pro-2", "반론 · 찬성 측"),
+    ("con_rerebut", "con-3", "최종 변론 · 반대 측"),
+    ("pro_rerebut", "pro-3", "최종 변론 · 찬성 측"),
 ]
+
+ROLE_ALIASES = {
+    "pro": "pro_open",
+    "con": "con_open",
+    "rebut": "pro_rebut",
+}
 
 
 def parse_fact_json(text: str) -> dict | None:
@@ -82,6 +91,17 @@ def parse_speech(text: str) -> tuple[str, list[str]]:
             for item in re.findall(r"\d+[.)]\s*(.+)", block.group(1))
             if item.strip()
         ]
+    if not grounds:
+        block = re.search(
+            r"핵심 쟁점\s*[:：]?\s*\n((?:\s*[-•]?\s*\d+[.)]\s*.+\n?)+)",
+            raw,
+        )
+        if block:
+            grounds = [
+                item.strip()
+                for item in re.findall(r"\d+[.)]\s*(.+)", block.group(1))
+                if item.strip()
+            ]
 
     if not summary:
         for line in raw.splitlines():
@@ -134,6 +154,20 @@ def collect_fact_claims(fact: dict | None) -> list[tuple[str, dict]]:
     return out
 
 
+def merge_facts(*facts: dict | None) -> dict:
+    merged = {
+        "pro_claims_checked": [],
+        "con_claims_checked": [],
+        "rebuttal_claims_checked": [],
+    }
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        for key in merged:
+            merged[key].extend(fact.get(key) or [])
+    return merged
+
+
 def attach_claims(turns: list[dict], fact: dict | None) -> None:
     bags = collect_fact_claims(fact)
     for side, claim in bags:
@@ -177,6 +211,9 @@ def build_turns(
     """Langflow 결과 → 학생 UI가 그대로 쓰는 페이로드."""
 
     by_role = {item.get("role"): item for item in rounds}
+    for old, new in ROLE_ALIASES.items():
+        if old in by_role and new not in by_role:
+            by_role[new] = by_role[old]
     turns: list[dict] = []
     for role, turn_id, label in ROUND_META:
         raw = (by_role.get(role) or {}).get("text") or ""
@@ -184,7 +221,7 @@ def build_turns(
             continue
         summary, grounds = parse_speech(raw)
         claim = grounds[0] if grounds else summary
-        side = "con" if role == "con" else "pro"
+        side = "con" if str(role).startswith("con") else "pro"
         turns.append(
             {
                 "id": turn_id,
