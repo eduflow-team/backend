@@ -1,64 +1,52 @@
-# Stage 1 백엔드 구현 메모
+# Stage 1 백엔드 구현 메모 (퀴즈 재설계)
 
-## API (`/api/v1`)
+> 기존 Stage1 과제·제출은 마이그레이션 `b2c3d4e5f6a7`에서 **삭제**됨. 과제 재출제 필요.  
+> 기획: `stage1-redesign-checklist.md`, `stage1-scoring-redesign.md`
+
+## API
 
 | Method | Path | 비고 |
 |--------|------|------|
-| POST | `/teacher/assignments/step1` | multipart + preset 5종 임베딩 (동시성 최대 2) |
-| GET | `/student/assignments/{id}/step1` | 상세·시도·최고점 |
-| POST | `/student/assignments/{id}/step1/chat` | 검색 + Langflow 생성 (+청크 preview). 미설정/실패 시 503 |
-| POST | `/student/assignments/{id}/step1/submit` | 시도 3회 + 하이브리드 채점 + `student_prompt` |
+| POST | `/teacher/assignments/step1` | multipart: `question`, `answer`, defaults, `file`, `due_at` … |
+| GET | `/student/assignments/{id}/step1` | 문제·자료텍스트·파라미터. 정답은 **마감 후**만 |
+| POST | `/student/assignments/{id}/step1/chat` | 자유 `message` + 파라미터. chunk preview 포함 |
+| POST | `/student/assignments/{id}/step1/submit` | `student_answer` + `final_parameters` |
 
-Form (create): `class_id`, `subject`, `question`, `guideline`, `default_chunk_size`, `default_top_k`, `default_temperature`, `file`
+### create Form
+`class_id`, `subject`, `question`, `answer`, `due_at`, `file`  
+시작 파라미터는 서버 고정: **chunk 50 · top_k 2 · temperature 1.0** (`STAGE1_DEFAULT_*`)
 
-submit Body: `final_parameters`, `selected_ai_response`, `student_prompt`
+### submit Body
+```json
+{ "final_parameters": { "chunk_size", "top_k", "temperature" }, "student_answer": "..." }
+```
 
-chat `rag_process_visualization`: `total_chunks`, `retrieved_chunks`, `vector_search_score`, `retrieved_chunk_previews`
+### chat visualization
+`total_chunks`, `retrieved_chunks`, `vector_search_score`, `retrieved_chunk_previews`, `approx_context_chars`
 
----
+## 채점
 
-## 파라미터 · 학습 목표
+- 제출 **2회** (`STAGE1_MAX_ATTEMPTS=2`)
+- `final = max(0, correct_score − resource_penalty)`
+  - 맞춤 → correct 100 / 틀림 → 0 (정규화 후 완전일치)
+  - 리소스 감점: 교사 **default**보다 키운 `top_k`·`chunk_size`만 (`w=0.3`, 최대 ~30). temperature 제외
+- 정답 문자열: 마감 전에는 API에 미포함
 
-- 시작 default: `chunk_size=200`, `top_k=2`, `temperature=1.0` (부정확해지기 쉬운 시작점)
-- **PDF마다 최적 조합이 다르다.** create 시 `optimal_parameters`를 서버가 찾아 저장
-- 학생은 파라미터를 바꿔 보고, preview·답·채점으로 이 자료에 맞는 값(optimal에 가까운 값)을 찾는다
-- 답변은 항상 존재 (거부 금지). 검색이 약하면 일반 지식 보완(틀린 답 가능), 관련 청크가 많으면 교재 우선
+## PDF / OCR
 
-- PDF: `pypdf` 텍스트 레이어 추출 → 본문이 빈약하면 **OCR 폴백**
-  - 1순위: Tesseract (`kor+eng`, Docker 이미지에 포함)
-  - 2순위: OpenAI Vision (Tesseract 없을 때, `OPENAI_API_KEY` 필요)
-- `question`은 업로드 PDF에 있는 주제로 둘 것.
-
----
-
-## chat 검색·생성
-
-- `top_k` / `temperature`만 바꿔도 재임베딩하지 않음
-- DB preset 청크 로드 → 질문 임베딩 → cosine → `top_k` → Langflow 생성
-- chunk_size 허용: `50 / 200 / 500 / 1200 / 3000` (밖이면 400)
-- create 시 preset 5종 임베딩(동시 최대 2), chat은 재사용
-
-## submit
-
-- 마지막 제출만 `is_final=true`
-- `student_prompt` = chat 때 `message` (고정 질문: `오늘 학습 주제의 내용을 전체적으로 알려줘`)
-- 채점: **`최종 = 0.8×optimal근접 + 0.2×답변품질`**
-  - `optimal_parameters`: create 시 서버가 자동 탐색해 DB 저장 (학생 API 미노출)
-  - 근접: 제출 파라미터 ↔ optimal 정규화 거리 → `100×(1−distance)`
-  - 품질: 제출 파라미터로 재검색한 청크 대비 답변 토큰 겹침 (기존과 동일)
-- optimal 탐색: 고정 질문으로 chunk×top_k 검색 품질 그리드 → 최고점의 90% 이상(elbow) 중 **가장 약한** 설정 → temperature는 생성 가능 시 고품질 대역의 **가장 낮은** 값
+- pypdf → (부족 시) Tesseract → OpenAI Vision
+- 추출 후 `_normalize_extracted_text`로 URL·짧은 노이즈 줄 정리 → `documents.raw_text`
+- create 시 preset 5종 청킹·임베딩 유지 (chat 시 재사용)
 
 ## Langflow
 
-`LangflowClient.run_stage1_chat` (Stage1 mock 없음)
+env: `LANGFLOW_URL`, `LANGFLOW_API_KEY`, `LANGFLOW_STAGE1_*`  
+채팅은 근거 탐색용 (제출 본문 아님).
 
-- env: `LANGFLOW_URL`, `LANGFLOW_API_KEY`, `LANGFLOW_STAGE1_CHAT_FLOW_ID`, `LANGFLOW_STAGE1_PROMPT_NODE_ID`, `LANGFLOW_STAGE1_MODEL_NODE_ID`
-- tweaks: Prompt `context`, OpenAI `temperature`
-- Prompt `context`는 다른 노드와 연결하지 말 것 / Chat Input → `message` 유지
-- 프롬프트: ai 레포 `prompts/stage1/rag-chat.md`
+### WEAK / STRONG context 래핑
 
-## 임베딩 안정화
+검색 품질이 약하면 Langflow용 `context`에 `[내부모드: WEAK]` + 시대착오 노이즈를 붙인다.  
+충분하면 `[내부모드: STRONG]`. 학생 UI `retrieved_chunk_previews`에는 **실청크만**.
 
-- 실패 시 OpenAI HTTP status/body를 로그에 기록
-- 429/5xx/timeout 등은 exponential backoff 재시도
-- create preset 임베딩은 `Semaphore(2)`로 동시성 제한
+판정(기본): chars < 350 **또는** score < 0.42 **또는** (`chunk_size<=50` and `top_k<=2`)  
+코드: `app/services/stage1_context.py` · 설정: `STAGE1_WEAK_*`

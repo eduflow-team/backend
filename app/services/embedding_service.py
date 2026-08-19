@@ -405,21 +405,45 @@ def _ocr_pdf_with_openai(content: bytes) -> str | None:
     return joined or None
 
 
+def _normalize_extracted_text(text: str) -> str:
+    """OCR/추출 텍스트에서 URL·짧은 노이즈 줄을 줄인다."""
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"https?://\S+", " ", text)
+    lines: list[str] = []
+    for raw in text.split("\n"):
+        line = raw.strip()
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if re.fullmatch(r"[\d./:\-\s]+", line) and len(line) <= 24:
+            continue
+        if len(line) == 1 and lines and lines[-1]:
+            lines[-1] = lines[-1] + line
+            continue
+        lines.append(line)
+    joined = "\n".join(lines)
+    return re.sub(r"\n{3,}", "\n\n", joined).strip()
+
+
 def extract_text_from_upload(filename: str, content: bytes) -> str:
     """txt/md/pdf 업로드에서 본문 텍스트를 추출한다.
 
     PDF는 먼저 텍스트 레이어(pypdf)를 읽고, 본문이 빈약하면 OCR 폴백한다.
     OCR 우선순위: Tesseract(로컬/Docker) → OpenAI Vision.
+    추출 후 잡음 정규화하여 raw_text로 저장한다.
     """
 
     lower = filename.lower()
     if lower.endswith((".txt", ".md", ".markdown")):
         for encoding in ("utf-8", "cp949", "euc-kr"):
             try:
-                return content.decode(encoding)
+                return _normalize_extracted_text(content.decode(encoding))
             except UnicodeDecodeError:
                 continue
-        return content.decode("utf-8", errors="ignore")
+        return _normalize_extracted_text(content.decode("utf-8", errors="ignore"))
 
     if lower.endswith(".pdf"):
         try:
@@ -436,7 +460,7 @@ def extract_text_from_upload(filename: str, content: bytes) -> str:
             text, page_count=page_count
         )
         if not needs_ocr and text.strip():
-            return text
+            return _normalize_extracted_text(text)
 
         logger.info(
             "pdf OCR fallback start file=%s pages=%s text_len=%s hangul=%s",
@@ -449,17 +473,17 @@ def extract_text_from_upload(filename: str, content: bytes) -> str:
         ocr_text = _ocr_pdf_with_tesseract(content)
         if ocr_text and not _pdf_text_insufficient(ocr_text, page_count=page_count):
             logger.info("pdf OCR via tesseract ok chars=%s", len(ocr_text))
-            return ocr_text
+            return _normalize_extracted_text(ocr_text)
 
         ocr_text = _ocr_pdf_with_openai(content)
         if ocr_text and ocr_text.strip():
             logger.info("pdf OCR via openai ok chars=%s", len(ocr_text))
-            return ocr_text
+            return _normalize_extracted_text(ocr_text)
 
         if text.strip():
             # OCR 실패해도 텍스트 레이어라도 있으면 사용 (최후)
             logger.warning("pdf OCR failed; using weak text-layer extract")
-            return text
+            return _normalize_extracted_text(text)
 
         raise Stage1DocumentProcessingError(
             "이미지 PDF에서 텍스트를 추출하지 못했습니다. "

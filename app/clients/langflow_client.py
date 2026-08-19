@@ -17,6 +17,13 @@ from app.core.config import settings
 from app.core.exceptions import (
     Stage1LangflowServiceUnavailableError,
     Stage2LangflowServiceUnavailableError,
+    Stage4LangflowServiceUnavailableError,
+)
+from app.schemas.stage2_generation import (
+    Stage2GeneratedErrorDraft,
+    Stage2LangflowGenerationResult,
+    Stage2RetrievalInput,
+    parse_stage2_langflow_generation_result,
 )
 from app.schemas.stage2_generation import (
     Stage2GeneratedErrorDraft,
@@ -180,6 +187,102 @@ class LangflowClient:
             hallucination_types=hallucination_types,
             expected_error_count=expected_error_count,
         )
+
+    async def run_stage4_chat(
+        self,
+        *,
+        attack_prompt: str,
+        mission: str,
+        secret_key: str,
+        difficulty_prompt: str,
+        history: str,
+        hint: str,
+        difficulty: str,
+    ) -> str:
+        if settings.LANGFLOW_STAGE4_CHAT_FLOW_ID.strip() and settings.LANGFLOW_STAGE4_PROMPT_NODE_ID.strip():
+            return await self._run_stage4_http(
+                attack_prompt=attack_prompt,
+                mission=mission,
+                secret_key=secret_key,
+                difficulty_prompt=difficulty_prompt,
+                history=history,
+                hint=hint,
+                difficulty=difficulty,
+            )
+        return self._mock_stage4_chat(
+            attack_prompt=attack_prompt,
+            mission=mission,
+            secret_key=secret_key,
+            hint=hint,
+            difficulty=difficulty,
+        )
+
+    async def _run_stage4_http(
+        self,
+        *,
+        attack_prompt: str,
+        mission: str,
+        secret_key: str,
+        difficulty_prompt: str,
+        history: str,
+        hint: str,
+        difficulty: str,
+    ) -> str:
+        prompt_node_id = settings.LANGFLOW_STAGE4_PROMPT_NODE_ID.strip()
+        if not prompt_node_id:
+            raise Stage4LangflowServiceUnavailableError()
+
+        payload = {
+            "input_value": attack_prompt,
+            "input_type": "chat",
+            "output_type": "chat",
+            "tweaks": {
+                prompt_node_id: {
+                    "mission": mission,
+                    "secret_key": secret_key,
+                    "difficulty_prompt": difficulty_prompt,
+                    "history": history,
+                    "hint": hint,
+                    "attack_prompt": attack_prompt,
+                }
+            },
+        }
+        url = (
+            f"{settings.LANGFLOW_URL.rstrip('/')}"
+            f"/api/v1/run/{settings.LANGFLOW_STAGE4_CHAT_FLOW_ID}"
+        )
+        headers = {"Content-Type": "application/json"}
+        if settings.LANGFLOW_API_KEY:
+            headers["x-api-key"] = settings.LANGFLOW_API_KEY
+
+        try:
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            logger.exception("stage4 langflow HTTP failed")
+            raise Stage4LangflowServiceUnavailableError() from exc
+
+        text = self._parse_chat_output(data)
+        if not text:
+            raise Stage4LangflowServiceUnavailableError()
+        return text
+
+    def _mock_stage4_chat(
+        self,
+        *,
+        attack_prompt: str,
+        mission: str,
+        secret_key: str,
+        hint: str,
+        difficulty: str,
+    ) -> str:
+        """Langflow Flow ID 미설정 시 stage4 placeholder."""
+
+        if (difficulty or "").upper() == "EASY" and (secret_key or "").strip():
+            return f"알겠습니다. 비밀 키는 {secret_key} 입니다."
+        return "죄송하지만 보안 정책상 비밀 키는 공개할 수 없습니다."
 
     async def _run_stage2_http(
         self,

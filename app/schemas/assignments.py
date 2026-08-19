@@ -1,4 +1,4 @@
-"""Stage 1 과제 API Request/Response 스키마 (Notion flat JSON)."""
+"""Stage 1 과제 API Request/Response 스키마 (퀴즈 1문제 + 리소스 감점)."""
 
 from datetime import datetime
 
@@ -9,7 +9,7 @@ from app.core.datetime_utils import serialize_utc_z
 
 
 class Stage1Parameters(BaseModel):
-    # 허용값은 settings.STAGE1_CHUNK_SIZE_PRESETS — 서비스에서 400으로 검증
+    # 허용값은 settings.STAGE1_CHUNK_SIZE_PRESETS — 서비스에서 검증
     chunk_size: int
     top_k: int = Field(..., ge=1, le=50)
     temperature: float = Field(..., ge=0.0, le=1.0)
@@ -32,8 +32,10 @@ class RagProcessVisualization(BaseModel):
     total_chunks: int
     retrieved_chunks: int
     vector_search_score: float
-    # 학생이 답과 대조할 수 있도록 검색된 청크 본문(순서=유사도 높은 순)
+    # 학생이 근거를 확인할 수 있도록 검색된 청크 본문(유사도 높은 순)
     retrieved_chunk_previews: list[str] = Field(default_factory=list)
+    # top_k × chunk_size 대략치 (토큰/비용 감 잡이용 프록시)
+    approx_context_chars: int = 0
 
 
 class Stage1ChatResponse(BaseModel):
@@ -43,29 +45,21 @@ class Stage1ChatResponse(BaseModel):
 
 class Stage1SubmitRequest(BaseModel):
     final_parameters: Stage1Parameters
-    selected_ai_response: str = Field(..., min_length=1)
-    student_prompt: str = Field(..., min_length=1)
+    student_answer: str = Field(..., min_length=1)
 
-    @field_validator("selected_ai_response")
+    @field_validator("student_answer")
     @classmethod
-    def strip_response(cls, value: str) -> str:
+    def strip_student_answer(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
-            raise ValueError("selected_ai_response는 비어 있을 수 없습니다.")
-        return stripped
-
-    @field_validator("student_prompt")
-    @classmethod
-    def strip_student_prompt(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("student_prompt는 비어 있을 수 없습니다.")
+            raise ValueError("student_answer는 비어 있을 수 없습니다.")
         return stripped
 
 
 class Stage1EvaluationReport(BaseModel):
-    faithfulness_score: int
-    relevance_score: int
+    is_correct: bool
+    correct_score: int
+    resource_penalty: int
     feedback: str
 
 
@@ -78,8 +72,11 @@ class Stage1SubmitResponse(BaseModel):
     current_score: int
     highest_score: int
     is_highest_score: bool
+    is_correct: bool
     evaluation_report: Stage1EvaluationReport
     attempts: Stage1AttemptsInfo
+    # 마감 후에만 정답 문자열 포함
+    correct_answer: str | None = None
 
 
 class Stage1ParameterExplanations(BaseModel):
@@ -97,13 +94,18 @@ class Stage1AttemptsDetail(BaseModel):
 class Stage1AssignmentDetailResponse(BaseModel):
     assignment_id: int
     question: str
-    guideline: str
     due_at: datetime | None = None
     parameter_explanations: Stage1ParameterExplanations
     default_parameters: Stage1Parameters
     attempts: Stage1AttemptsDetail
     highest_score: int | None = None
     best_parameters: Stage1Parameters | None = None
+    document_filename: str | None = None
+    document_url: str | None = None
+    document_text: str | None = None
+    # 마감 전 False. True일 때만 correct_answer 채움
+    is_answer_revealed: bool = False
+    correct_answer: str | None = None
 
     @field_serializer("due_at")
     def serialize_due_at(self, value: datetime | None) -> str | None:
@@ -115,7 +117,6 @@ class Stage1CreateResponse(BaseModel):
     created_at: datetime | None
     due_at: datetime | None
     question: str
-    guideline: str
 
     @field_serializer("created_at")
     def serialize_created_at(self, value: datetime | None) -> str | None:
@@ -134,10 +135,11 @@ PARAMETER_EXPLANATIONS = Stage1ParameterExplanations(
     ),
     top_k=(
         "검색된 청크 중 AI에게 넘겨주는 개수입니다. "
-        "K가 낮으면 정보 부족, 높으면 노이즈가 섞입니다."
+        "K가 낮으면 정보 부족, 높으면 노이즈가 섞입니다. "
+        "기본값보다 크게 올리면 맞더라도 감점될 수 있습니다."
     ),
     temperature=(
         "AI 답변의 무작위성 정도입니다. "
-        "값이 낮을수록 일관되고 정확한 답변을 생성합니다."
+        "값이 낮을수록 일관된 답변을 생성합니다. (채점 감점에는 사용하지 않습니다.)"
     ),
 )
