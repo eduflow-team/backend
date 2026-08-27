@@ -58,6 +58,32 @@ class Stage1Attempt(Base):
     )
 
 
+class Stage3DebateAttempt(Base):
+    __tablename__ = "stage3_debate_attempts"
+
+    attempt_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.user_id", name="fk_stage3_attempts_user"), nullable=False
+    )
+    assignment_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("assignments.assignment_id", name="fk_stage3_attempts_assignment"),
+        nullable=False,
+    )
+    submission_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("submissions.submission_id", name="fk_stage3_attempts_submission"),
+        nullable=True,
+    )
+    attempt_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    debate_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    checked_turn_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=True
+    )
+
+
 class Stage2HighlightSubmission(Base):
     __tablename__ = "stage2_highlight_submissions"
 

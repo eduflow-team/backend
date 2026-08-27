@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     LANGFLOW_STAGE2_FLOW_ID: str = ""
     LANGFLOW_STAGE2_GEN_PROMPT_NODE_ID: str = ""
     LANGFLOW_STAGE2_EXT_PROMPT_NODE_ID: str = ""
+    LANGFLOW_STAGE3_FLOW_ID: str = ""
+    LANGFLOW_STAGE3_V2_FLOW_ID: str = ""
+    LANGFLOW_STAGE3_PRO_AGENT_ID: str = "LM-s3pro"
+    LANGFLOW_STAGE3_CON_AGENT_ID: str = "LM-s3con"
+    LANGFLOW_STAGE3_FACT_AGENT_ID: str = "LM-s3fact"
+    LANGFLOW_STAGE3_V1_ENDPOINT: str = "stage3-debate"
+    LANGFLOW_STAGE3_V2_ENDPOINT: str = "stage3-debate-v2"
 
     # Stage 4 (프롬프트 인젝션)
     LANGFLOW_STAGE4_CHAT_FLOW_ID: str = ""
@@ -83,6 +90,11 @@ class Settings(BaseSettings):
     STAGE2_MAX_CANDIDATE_TOTAL_CHARS: int = 4000
     STAGE2_GENERATION_DOCUMENT_MAX_CHARS: int = 6000
     STAGE2_STUDENT_EXCERPT_MAX_CHARS: int = 1200
+
+    # Stage 3
+    STAGE3_MAX_ATTEMPTS: int = 3
+    # Langflow 미연결 로컬 개발 시에만 true (기본: 503)
+    STAGE3_ALLOW_MOCK: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
