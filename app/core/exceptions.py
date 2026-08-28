@@ -253,6 +253,20 @@ class InvalidStage1SubmitError(DomainException):
     default_message = "제출 데이터가 누락되었거나 형식이 올바르지 않습니다."
 
 
+class InvalidStage1FinalizeError(DomainException):
+    """1단계 최종 답안 선택이 불가능할 때 발생 (400)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_message = "최종으로 고를 제출 기록을 확인한 뒤 다시 시도해 주세요."
+
+
+class Stage1AlreadyFinalizedError(DomainException):
+    """1단계 최종 제출이 이미 확정된 뒤 다시 finalize할 때 발생 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "이미 최종 제출이 확정되었습니다."
+
+
 class Stage2AccessForbiddenError(DomainException):
     """2단계 과제 API를 role·학급 권한이 없는 계정으로 접근할 때 발생 (403)."""
 

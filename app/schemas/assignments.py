@@ -68,6 +68,18 @@ class Stage1AttemptsInfo(BaseModel):
     remaining_attempts: int
 
 
+class Stage1AttemptSummary(BaseModel):
+    attempt_number: int
+    score: int
+    is_correct: bool
+    correct_score: int
+    resource_penalty: int
+    feedback: str
+    student_answer: str
+    parameters: Stage1Parameters
+    is_final: bool = False
+
+
 class Stage1SubmitResponse(BaseModel):
     current_score: int
     highest_score: int
@@ -75,7 +87,25 @@ class Stage1SubmitResponse(BaseModel):
     is_correct: bool
     evaluation_report: Stage1EvaluationReport
     attempts: Stage1AttemptsInfo
+    attempt_summaries: list[Stage1AttemptSummary] = Field(default_factory=list)
+    is_finalized: bool = False
     # 마감 후에만 정답 문자열 포함
+    correct_answer: str | None = None
+
+
+class Stage1FinalizeRequest(BaseModel):
+    attempt_number: int = Field(..., ge=1)
+
+
+class Stage1FinalizeResponse(BaseModel):
+    attempt_number: int
+    current_score: int
+    highest_score: int
+    is_correct: bool
+    evaluation_report: Stage1EvaluationReport
+    attempts: Stage1AttemptsInfo
+    attempt_summaries: list[Stage1AttemptSummary] = Field(default_factory=list)
+    is_finalized: bool = True
     correct_answer: str | None = None
 
 
@@ -98,6 +128,9 @@ class Stage1AssignmentDetailResponse(BaseModel):
     parameter_explanations: Stage1ParameterExplanations
     default_parameters: Stage1Parameters
     attempts: Stage1AttemptsDetail
+    attempt_summaries: list[Stage1AttemptSummary] = Field(default_factory=list)
+    is_finalized: bool = False
+    final_attempt_number: int | None = None
     highest_score: int | None = None
     best_parameters: Stage1Parameters | None = None
     document_filename: str | None = None

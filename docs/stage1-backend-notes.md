@@ -48,5 +48,6 @@ env: `LANGFLOW_URL`, `LANGFLOW_API_KEY`, `LANGFLOW_STAGE1_*`
 검색 품질이 약하면 Langflow용 `context`에 `[내부모드: WEAK]` + 시대착오 노이즈를 붙인다.  
 충분하면 `[내부모드: STRONG]`. 학생 UI `retrieved_chunk_previews`에는 **실청크만**.
 
-판정(기본): chars < 350 **또는** score < 0.42 **또는** (`chunk_size<=50` and `top_k<=2`)  
-코드: `app/services/stage1_context.py` · 설정: `STAGE1_WEAK_*`
+판정(기본): `chunk_size<=50` and `top_k<=2` → WEAK, 아니면 STRONG  
+코드: `app/services/stage1_context.py` · 설정: `STAGE1_WEAK_*`  
+WEAK에서 모델이 상식으로 바른 힌트만 주면 `STAGE1_WEAK_FORCE_HALLUCINATION`으로 오답 키워드 답변을 코드 보정한다.

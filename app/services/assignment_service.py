@@ -23,10 +23,12 @@ from app.core.datetime_utils import normalize_assignment_due_at
 from app.core.exceptions import (
     AssignmentNotFoundError,
     InvalidStage1CreateError,
+    InvalidStage1FinalizeError,
     InvalidStage1ParameterError,
     InvalidStage1SubmitError,
     InvalidTokenError,
     Stage1AccessForbiddenError,
+    Stage1AlreadyFinalizedError,
     Stage1DocumentNotFoundError,
     Stage1DocumentProcessingError,
     Stage1FileTooLargeError,
@@ -53,12 +55,15 @@ from app.schemas.assignments import (
     PARAMETER_EXPLANATIONS,
     RagProcessVisualization,
     Stage1AssignmentDetailResponse,
+    Stage1AttemptSummary,
     Stage1AttemptsDetail,
     Stage1AttemptsInfo,
     Stage1ChatRequest,
     Stage1ChatResponse,
     Stage1CreateResponse,
     Stage1EvaluationReport,
+    Stage1FinalizeRequest,
+    Stage1FinalizeResponse,
     Stage1Parameters,
     Stage1SubmitRequest,
     Stage1SubmitResponse,
@@ -71,10 +76,11 @@ from app.services.embedding_service import (
     split_text_into_chunks,
 )
 from app.services.stage1_context import (
+    build_stage1_langflow_pack,
+    enforce_stage1_weak_hallucination,
     format_stage1_topk_sentences,
     is_stage1_weak_retrieval,
     redact_stage1_answer_leak,
-    wrap_stage1_langflow_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -254,9 +260,30 @@ class AssignmentService:
             else max(0, max_attempts - used_attempts)
         )
 
+        final_submission = await self.submission_repository.get_final_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        is_finalized = final_submission is not None or (
+            status.progress_status == ProgressStatus.COMPLETED.value
+        )
+        attempt_summaries = await self._build_attempt_summaries(
+            scored_attempts, final_submission_id=final_submission.submission_id if final_submission else None
+        )
+        final_attempt_number = next(
+            (s.attempt_number for s in attempt_summaries if s.is_final), None
+        )
+
         highest_score = status.best_score
         best_parameters: Stage1Parameters | None = None
-        if scored_attempts:
+        if final_attempt_number is not None:
+            chosen = next(
+                (s for s in attempt_summaries if s.attempt_number == final_attempt_number),
+                None,
+            )
+            if chosen is not None:
+                highest_score = chosen.score
+                best_parameters = chosen.parameters
+        elif scored_attempts:
             best = max(scored_attempts, key=lambda a: float(a.score or 0))
             if highest_score is None and best.score is not None:
                 highest_score = int(best.score)
@@ -286,6 +313,9 @@ class AssignmentService:
                 used_attempts=used_attempts,
                 remaining_attempts=remaining,
             ),
+            attempt_summaries=attempt_summaries,
+            is_finalized=is_finalized,
+            final_attempt_number=final_attempt_number,
             highest_score=highest_score,
             best_parameters=best_parameters,
             document_filename=document_filename,
@@ -350,13 +380,23 @@ class AssignmentService:
             )
             else "STRONG"
         )
-        langflow_context = wrap_stage1_langflow_context(context, mode=mode)
+        pack = build_stage1_langflow_pack(context, mode=mode)
+        # WEAK일 때는 창의적으로 빗나가게 temperature 하한을 둔다.
+        chat_temperature = (
+            max(float(params.temperature), 0.95) if mode == "WEAK" else params.temperature
+        )
 
         ai_response = await self.langflow_client.run_stage1_chat(
             message=payload.message,
-            context=langflow_context,
-            temperature=params.temperature,
+            context=pack.context,
+            temperature=chat_temperature,
         )
+        if mode == "WEAK":
+            ai_response = enforce_stage1_weak_hallucination(
+                ai_response,
+                planted_noises=pack.planted_noises,
+                correct_answer=detail.answer or "",
+            )
         ai_response = redact_stage1_answer_leak(
             ai_response, detail.answer or ""
         )
@@ -412,6 +452,12 @@ class AssignmentService:
         if used >= max_attempts:
             raise Stage1SubmitLimitExceededError()
 
+        existing_final = await self.submission_repository.get_final_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        if existing_final is not None or status.progress_status == ProgressStatus.COMPLETED.value:
+            raise Stage1AlreadyFinalizedError()
+
         default_params = self._parse_parameters(detail.default_parameters)
         is_correct = self._answers_match(student_answer, correct_answer)
         correct_score = 100 if is_correct else 0
@@ -426,9 +472,6 @@ class AssignmentService:
             resource_penalty=resource_penalty,
         )
 
-        await self.submission_repository.clear_final_for_user_and_assignment(
-            student.user_id, assignment_id
-        )
         submission = Submission(
             user_id=student.user_id,
             assignment_id=assignment_id,
@@ -436,7 +479,7 @@ class AssignmentService:
             submitted_answer=student_answer,
             final_parameters=params.model_dump(),
             current_score=current_score,
-            is_final=True,
+            is_final=False,
         )
         submission = await self.submission_repository.create(submission)
 
@@ -469,22 +512,72 @@ class AssignmentService:
         )
         await self.evaluation_repository.create(evaluation)
 
-        previous_best = status.best_score
-        is_highest = previous_best is None or current_score > previous_best
-        new_best = current_score if is_highest else (previous_best or current_score)
-        remaining = max(0, max_attempts - attempt_number)
+        # 정답이면 즉시 최종 확정. 오답이면 1회 더 허용하고,
+        # 마지막 기회까지 쓰면 두 제출 중 점수가 높은 쪽으로 확정.
+        should_finalize = is_correct or attempt_number >= max_attempts
+        final_submission_id: int | None = None
+        if should_finalize:
+            await self.submission_repository.clear_final_for_user_and_assignment(
+                student.user_id, assignment_id
+            )
+            # flush된 현재 시도 포함해 최고점 선택 (동점이면 나중 시도)
+            all_attempts = await self.attempt_repository.list_by_user_and_assignment(
+                student.user_id, assignment_id
+            )
+            scored_all = [a for a in all_attempts if a.score is not None]
+            best_attempt = max(
+                scored_all,
+                key=lambda a: (float(a.score or 0), int(a.attempt_number or 0)),
+            )
+            if best_attempt.submission_id == submission.submission_id:
+                submission.is_final = True
+                await self.submission_repository.update(submission)
+                final_submission_id = submission.submission_id
+            elif best_attempt.submission_id is not None:
+                best_submission = await self.submission_repository.get_by_id(
+                    best_attempt.submission_id
+                )
+                if best_submission is None:
+                    submission.is_final = True
+                    await self.submission_repository.update(submission)
+                    final_submission_id = submission.submission_id
+                    best_attempt = attempt
+                else:
+                    best_submission.is_final = True
+                    await self.submission_repository.update(best_submission)
+                    final_submission_id = best_submission.submission_id
+            else:
+                submission.is_final = True
+                await self.submission_repository.update(submission)
+                final_submission_id = submission.submission_id
+
+            remaining = 0
+            new_best = int(best_attempt.score or current_score)
+            is_highest = new_best >= current_score
+            progress = ProgressStatus.COMPLETED.value
+        else:
+            previous_best = status.best_score
+            is_highest = previous_best is None or current_score > previous_best
+            new_best = current_score if is_highest else (previous_best or current_score)
+            remaining = max(0, max_attempts - attempt_number)
+            progress = ProgressStatus.IN_PROGRESS.value
 
         await self.status_repository.update_progress(
             status,
-            progress_status=(
-                ProgressStatus.COMPLETED.value
-                if remaining == 0
-                else ProgressStatus.IN_PROGRESS.value
-            ),
+            progress_status=progress,
             best_score=new_best,
             remaining_attempts=remaining,
         )
         await self.session.commit()
+
+        all_attempts = await self.attempt_repository.list_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        scored_all = [a for a in all_attempts if a.score is not None]
+        attempt_summaries = await self._build_attempt_summaries(
+            scored_all,
+            final_submission_id=final_submission_id,
+        )
 
         revealed = self._is_answer_revealed(assignment.due_at)
         return Stage1SubmitResponse(
@@ -497,12 +590,171 @@ class AssignmentService:
                 used_attempts=attempt_number,
                 remaining_attempts=remaining,
             ),
+            attempt_summaries=attempt_summaries,
+            is_finalized=should_finalize,
+            correct_answer=(correct_answer if revealed else None),
+        )
+
+    async def finalize_step1(
+        self, user_id: int, assignment_id: int, payload: Stage1FinalizeRequest
+    ) -> Stage1FinalizeResponse:
+        student = await self._get_authorized_student(user_id)
+        assignment, detail = await self._get_stage1_assignment_for_student(
+            student, assignment_id
+        )
+        max_attempts = assignment.max_attempts or settings.STAGE1_MAX_ATTEMPTS
+        status = await self.status_repository.get_or_create(
+            student.user_id,
+            assignment_id,
+            remaining_attempts=max_attempts,
+        )
+
+        existing_final = await self.submission_repository.get_final_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        if existing_final is not None or status.progress_status == ProgressStatus.COMPLETED.value:
+            raise Stage1AlreadyFinalizedError()
+
+        attempts = await self.attempt_repository.list_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        scored = [a for a in attempts if a.score is not None]
+        if not scored:
+            raise InvalidStage1FinalizeError("채점된 제출이 없습니다. 먼저 답안을 제출해 주세요.")
+
+        chosen = next(
+            (
+                a
+                for a in scored
+                if a.attempt_number == payload.attempt_number and a.submission_id is not None
+            ),
+            None,
+        )
+        if chosen is None or chosen.submission_id is None:
+            raise InvalidStage1FinalizeError()
+
+        submission = await self.submission_repository.get_by_id(chosen.submission_id)
+        if submission is None:
+            raise InvalidStage1FinalizeError()
+
+        await self.submission_repository.clear_final_for_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        submission.is_final = True
+        await self.submission_repository.update(submission)
+
+        chosen_score = int(chosen.score or 0)
+        used = len(scored)
+        remaining = (
+            status.remaining_attempts
+            if status.remaining_attempts is not None
+            else max(0, max_attempts - used)
+        )
+
+        await self.status_repository.update_progress(
+            status,
+            progress_status=ProgressStatus.COMPLETED.value,
+            best_score=chosen_score,
+            remaining_attempts=remaining,
+        )
+        await self.session.commit()
+
+        evaluation = await self.evaluation_repository.get_by_submission_id(
+            chosen.submission_id
+        )
+        meta = evaluation.evaluation_metadata if evaluation else {}
+        is_correct = bool(meta.get("is_correct")) if meta else chosen_score > 0
+        correct_score = int(meta.get("correct_score", 100 if is_correct else 0)) if meta else (
+            100 if is_correct else 0
+        )
+        resource_penalty = int(meta.get("resource_penalty", 0)) if meta else 0
+        feedback = (
+            evaluation.feedback
+            if evaluation and evaluation.feedback
+            else self._build_evaluation_report(
+                is_correct=is_correct,
+                correct_score=correct_score,
+                resource_penalty=resource_penalty,
+            ).feedback
+        )
+        report = Stage1EvaluationReport(
+            is_correct=is_correct,
+            correct_score=correct_score,
+            resource_penalty=resource_penalty,
+            feedback=feedback,
+        )
+
+        attempt_summaries = await self._build_attempt_summaries(
+            scored, final_submission_id=chosen.submission_id
+        )
+        revealed = self._is_answer_revealed(assignment.due_at)
+        correct_answer = (detail.answer or "").strip()
+        return Stage1FinalizeResponse(
+            attempt_number=int(chosen.attempt_number or payload.attempt_number),
+            current_score=chosen_score,
+            highest_score=chosen_score,
+            is_correct=is_correct,
+            evaluation_report=report,
+            attempts=Stage1AttemptsInfo(
+                used_attempts=used,
+                remaining_attempts=remaining,
+            ),
+            attempt_summaries=attempt_summaries,
+            is_finalized=True,
             correct_answer=(correct_answer if revealed else None),
         )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _build_attempt_summaries(
+        self,
+        scored_attempts: list[Stage1Attempt],
+        *,
+        final_submission_id: int | None = None,
+    ) -> list[Stage1AttemptSummary]:
+        summaries: list[Stage1AttemptSummary] = []
+        for attempt in scored_attempts:
+            params = self._parse_parameters(attempt.parameters)
+            is_correct = False
+            correct_score = 0
+            resource_penalty = 0
+            feedback = ""
+            if attempt.submission_id is not None:
+                evaluation = await self.evaluation_repository.get_by_submission_id(
+                    attempt.submission_id
+                )
+                meta = evaluation.evaluation_metadata if evaluation else None
+                if meta:
+                    is_correct = bool(meta.get("is_correct"))
+                    correct_score = int(meta.get("correct_score", 0))
+                    resource_penalty = int(meta.get("resource_penalty", 0))
+                if evaluation and evaluation.feedback:
+                    feedback = evaluation.feedback
+                else:
+                    feedback = self._build_evaluation_report(
+                        is_correct=is_correct,
+                        correct_score=correct_score,
+                        resource_penalty=resource_penalty,
+                    ).feedback
+            summaries.append(
+                Stage1AttemptSummary(
+                    attempt_number=int(attempt.attempt_number or 0),
+                    score=int(attempt.score or 0),
+                    is_correct=is_correct,
+                    correct_score=correct_score,
+                    resource_penalty=resource_penalty,
+                    feedback=feedback,
+                    student_answer=(attempt.student_prompt or "").strip(),
+                    parameters=params,
+                    is_final=(
+                        final_submission_id is not None
+                        and attempt.submission_id == final_submission_id
+                    ),
+                )
+            )
+        return summaries
 
     async def _get_authorized_student(self, user_id: int) -> User:
         user = await self.user_repository.get_by_id(user_id)

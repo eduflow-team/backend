@@ -11,6 +11,8 @@ from app.schemas.assignments import (
     Stage1ChatRequest,
     Stage1ChatResponse,
     Stage1CreateResponse,
+    Stage1FinalizeRequest,
+    Stage1FinalizeResponse,
     Stage1SubmitRequest,
     Stage1SubmitResponse,
 )
@@ -145,6 +147,27 @@ async def submit_step1_assignment(
     db: AsyncSession = Depends(get_db),
 ) -> Stage1SubmitResponse:
     return await AssignmentService(db).submit_step1(user_id, id, payload)
+
+
+@router.post(
+    "/student/assignments/{id}/step1/finalize",
+    summary="제출 시도 중 최종 답안 확정",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage1FinalizeResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def finalize_step1_assignment(
+    id: int,
+    payload: Stage1FinalizeRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage1FinalizeResponse:
+    return await AssignmentService(db).finalize_step1(user_id, id, payload)
 
 
 @router.get(

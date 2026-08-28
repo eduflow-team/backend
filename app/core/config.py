@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     STAGE1_WEAK_CHUNK_SIZE: int = 50
     STAGE1_WEAK_TOP_K: int = 2
     STAGE1_WEAK_NOISE_ENABLED: bool = True
+    # WEAK인데 모델이 상식으로 바른 힌트만 주면 코드로 환각 답변 보정
+    STAGE1_WEAK_FORCE_HALLUCINATION: bool = True
 
     # Stage 2
     STAGE2_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10MB
