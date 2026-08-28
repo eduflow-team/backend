@@ -58,6 +58,7 @@ from app.schemas.stage3 import (
     Stage3Speaker,
     Stage3SubmitRequest,
     Stage3SubmitResponse,
+    Stage3TeacherPreviewResponse,
     Stage3TurnPublic,
 )
 from app.services.stage3_debate import (
@@ -147,6 +148,32 @@ class Stage3Service:
             topic=topic,
             debate_mode=debate_mode,
             created_at=assignment.created_at,
+        )
+
+    async def preview_step3_debate(
+        self, user_id: int, assignment_id: int
+    ) -> Stage3TeacherPreviewResponse:
+        assignment, detail = await self._get_stage3_assignment_for_teacher(user_id, assignment_id)
+
+        if detail.preview_debate_payload:
+            payload = detail.preview_debate_payload
+            return Stage3TeacherPreviewResponse(
+                assignment_id=assignment_id,
+                reused=True,
+                debate=self._to_public_debate(payload, set(), reveal_all=True),
+                elapsed=payload.get("elapsed"),
+            )
+
+        debate_payload = await self._generate_debate_payload(detail)
+        detail.preview_debate_payload = debate_payload
+        await self.stage3_detail_repository.update(detail)
+        await self.session.commit()
+
+        return Stage3TeacherPreviewResponse(
+            assignment_id=assignment_id,
+            reused=False,
+            debate=self._to_public_debate(debate_payload, set(), reveal_all=True),
+            elapsed=debate_payload.get("elapsed"),
         )
 
     # ------------------------------------------------------------------
@@ -249,32 +276,10 @@ class Stage3Service:
             raise Stage3SubmitLimitExceededError()
 
         question = (payload.question if payload else None) or detail.question
-        langflow_result = await self.langflow_client.run_debate(
-            topic=detail.topic,
-            pro_persona=detail.pro_persona,
-            con_persona=detail.con_persona,
-            fact_persona=detail.fact_persona or _DEFAULT_FACT_PERSONA,
-            question=question,
-            mode=detail.debate_mode or "v2",
-        )
-        speeches = langflow_result.speeches or {}
-        if speeches:
-            rounds = [{"role": role, "text": text} for role, text in speeches.items() if text]
+        if detail.preview_debate_payload:
+            debate_payload = detail.preview_debate_payload
         else:
-            rounds = [
-                {"role": "pro", "text": langflow_result.pro_argument},
-                {"role": "con", "text": langflow_result.con_argument},
-                {"role": "rebut", "text": langflow_result.rebuttal_argument},
-            ]
-        debate_payload = build_turns(
-            rounds,
-            langflow_result.fact_check,
-            topic=detail.topic,
-            pro_role=detail.pro_persona,
-            con_role=detail.con_persona,
-            source=langflow_result.source,
-            mode=detail.debate_mode or "v2",
-        )
+            debate_payload = await self._generate_debate_payload(detail, question=question)
         if not debate_payload.get("turns"):
             raise InvalidStage3SubmitError("에이전트 발언을 받지 못했습니다.")
 
@@ -569,6 +574,57 @@ class Stage3Service:
         if detail is None:
             raise AssignmentNotFoundError("존재하지 않는 과제입니다.")
         return assignment, detail
+
+    async def _get_stage3_assignment_for_teacher(
+        self, user_id: int, assignment_id: int
+    ) -> tuple[Assignment, Stage3AssignmentDetail]:
+        teacher = await self._get_authorized_teacher(user_id)
+        allowed_class_ids = await self._get_teacher_class_ids(teacher)
+        assignment = await self.assignment_repository.get_by_id(assignment_id)
+        if assignment is None or assignment.stage != 3:
+            raise AssignmentNotFoundError("존재하지 않는 과제입니다.")
+        if assignment.class_id not in allowed_class_ids:
+            raise Stage3AccessForbiddenError("해당 과제를 생성할 권한이 없습니다.")
+        if assignment.teacher_id != teacher.user_id:
+            raise Stage3AccessForbiddenError("해당 과제를 생성할 권한이 없습니다.")
+
+        detail = await self.stage3_detail_repository.get_by_assignment_id(assignment_id)
+        if detail is None:
+            raise AssignmentNotFoundError("존재하지 않는 과제입니다.")
+        return assignment, detail
+
+    async def _generate_debate_payload(
+        self,
+        detail: Stage3AssignmentDetail,
+        *,
+        question: str | None = None,
+    ) -> dict:
+        langflow_result = await self.langflow_client.run_debate(
+            topic=detail.topic,
+            pro_persona=detail.pro_persona,
+            con_persona=detail.con_persona,
+            fact_persona=detail.fact_persona or _DEFAULT_FACT_PERSONA,
+            question=question,
+            mode=detail.debate_mode or "v2",
+        )
+        speeches = langflow_result.speeches or {}
+        if speeches:
+            rounds = [{"role": role, "text": text} for role, text in speeches.items() if text]
+        else:
+            rounds = [
+                {"role": "pro", "text": langflow_result.pro_argument},
+                {"role": "con", "text": langflow_result.con_argument},
+                {"role": "rebut", "text": langflow_result.rebuttal_argument},
+            ]
+        return build_turns(
+            rounds,
+            langflow_result.fact_check,
+            topic=detail.topic,
+            pro_role=detail.pro_persona,
+            con_role=detail.con_persona,
+            source=langflow_result.source,
+            mode=detail.debate_mode or "v2",
+        )
 
     @staticmethod
     def _latest_in_progress(

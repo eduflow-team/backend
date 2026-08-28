@@ -22,21 +22,37 @@ _DEFAULT_PRO_PERSONA = "효율성을 강조하는 교육 전문가"
 _DEFAULT_CON_PERSONA = "개인정보 침해를 우려하는 인권 전문가"
 _DEFAULT_FACT_PERSONA = "중립적인 과학 기자"
 
+_FLAW_TYPES = (
+    "과장된 수치·통계, 허위/조작된 사실, "
+    "출처·기관명 없는 '연구에 따르면' 식 단정, "
+    "근거 없는 일반화, 잘못된 기관·법령 인용"
+)
+
+_FLAW_INSERTION_RULE = f"""토론 **전체**(입론~최종 변론, 찬성·반대 합산)에 학생이 팩트체크할 **의도적 오류를 최소 2개** 넣으세요.
+- 허용 오류 유형: {_FLAW_TYPES}
+- 오류는 핵심 근거 목록에 자연스럽게 섞고, 발언마다 0~1개씩 분산하세요.
+- 오류가 너무 뻔하거나 개수가 부족하면 학습 활동이 성립하지 않습니다."""
+
+_DEBATE_QUALITY_NOTE = f"""[토론 품질]
+찬성·반대·반론·결론을 합친 **전체 토론**에 의도적 오류(과장, 허위, 출처·기관 미언급 등)가 **최소 2개** 포함되어야 합니다.
+"""
+
 _PRO_PROMPT = """당신은 EduFlow 3단계 토론의 **찬성 에이전트**입니다.
 역할/성격: {persona}
 
 규칙:
 1. 토론 주제에 대해 찬성 입장만 주장하세요.
-2. 근거 2~4개를 제시하되, 과장·허위 사실을 섞을 수 있습니다(학생이 팩트체크하도록).
-3. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
-4. 출력 형식:
+2. 근거 2~4개를 제시하세요.
+3. {_flaw_rule}
+4. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
+5. 출력 형식:
 【찬성 입장】
 주장 요약: ...
 핵심 근거:
 1. ...
 2. ...
 예상 효과: ...
-"""
+""".replace("{_flaw_rule}", _FLAW_INSERTION_RULE)
 
 _CON_PROMPT = """당신은 EduFlow 3단계 토론의 **반대 에이전트**입니다.
 역할/성격: {persona}
@@ -44,9 +60,10 @@ _CON_PROMPT = """당신은 EduFlow 3단계 토론의 **반대 에이전트**입�
 규칙:
 1. 토론 주제에 대해 반대 입장만 주장하세요.
 2. 앞선 찬성 에이전트 주장의 허점·위험을 비판하세요.
-3. 근거 2~4개를 제시하되, 과장·허위 사실을 섞을 수 있습니다.
-4. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
-5. 출력 형식:
+3. 근거 2~4개를 제시하세요.
+4. {_flaw_rule}
+5. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
+6. 출력 형식:
 【반대 입장】
 주장 요약: ...
 찬성 측 비판: ...
@@ -54,7 +71,7 @@ _CON_PROMPT = """당신은 EduFlow 3단계 토론의 **반대 에이전트**입�
 1. ...
 2. ...
 우려되는 점: ...
-"""
+""".replace("{_flaw_rule}", _FLAW_INSERTION_RULE)
 
 _FACT_PROMPT = """당신은 EduFlow 3단계 토론의 **팩트체커 에이전트**입니다.
 역할/성격: {persona}
@@ -65,10 +82,12 @@ _FACT_PROMPT = """당신은 EduFlow 3단계 토론의 **팩트체커 에이전�
 - 찬성/반대 주장이 비어 있으면 검증하지 말고 오류를 보고하세요.
 
 규칙:
-1. 입력의 찬성·반대 주장에서 과장, 근거 부족, 사실 오류(환각)를 찾으세요.
-2. 중립적으로 검증하세요. 결론을 대신 내리지 마세요.
-3. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
-4. 반드시 아래 JSON만 출력하세요(다른 텍스트 금지):
+1. 입력의 찬성·반대 주장에서 과장, 근거 부족, 사실 오류(환각), **출처·기관명 없는 단정**을 찾으세요.
+2. `unsupported`는 근거·기관·연구명이 없는 단정, `exaggerated`는 과장된 수치, `false`는 사실과 다른 내용에 쓰세요.
+3. 중립적으로 검증하세요. 결론을 대신 내리지 마세요.
+4. 전체 토론에서 문제 있는 주장을 **최소 2개** pro_claims_checked 또는 con_claims_checked에 포함하세요.
+5. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
+6. 반드시 아래 JSON만 출력하세요(다른 텍스트 금지):
 {{
   "topic": "토론 주제",
   "pro_argument": "입력에서 받은 찬성 주장 요약",
@@ -79,6 +98,31 @@ _FACT_PROMPT = """당신은 EduFlow 3단계 토론의 **팩트체커 에이전�
   "unreliable_points": ["..."],
   "balanced_summary": "양측 비교 요약",
   "student_guide": "학생이 보고서를 쓸 때 확인할 질문 2~3개"
+}}
+"""
+
+_FINAL_FACT_PROMPT = """당신은 EduFlow 3단계 토론의 **팩트체커 에이전트**입니다.
+역할/성격: {persona}
+
+아래는 입론·반론·최종 변론까지 이어진 **전체 토론 기록**입니다. 새 주장을 만들지 말고, 기록만 검증하세요.
+
+{transcript}
+
+규칙:
+1. 위 전체 토론에서 과장, 근거 부족, 사실 오류, **출처·기관명 없는 단정**을 찾으세요.
+2. 문제 있는 주장을 pro_claims_checked 또는 con_claims_checked에 넣고, verdict는 supported|exaggerated|unsupported|false 중 하나로 표시하세요.
+3. exaggerated·unsupported·false 판정 주장을 **최소 2개** 반드시 포함하세요.
+4. 반드시 JSON만 출력하세요:
+{{
+  "topic": "{topic}",
+  "pro_argument": "찬성 측 요지",
+  "con_argument": "반대 측 요지",
+  "pro_claims_checked": [{{"claim": "...", "verdict": "...", "reason": "..."}}],
+  "con_claims_checked": [{{"claim": "...", "verdict": "...", "reason": "..."}}],
+  "reliable_points": ["..."],
+  "unreliable_points": ["..."],
+  "balanced_summary": "...",
+  "student_guide": "..."
 }}
 """
 
@@ -192,9 +236,10 @@ class Stage3LangflowClient:
 
 규칙:
 1. {label} 입장만 말하세요. {other} 입장을 취하지 마세요.
-2. 근거 2~3개를 제시하되, 과장·허위 사실을 섞을 수 있습니다(학생이 팩트체크하도록).
-3. 상대 발언을 인용할 때는 한 문장만 짧게 인용하세요.
-4. 중·고등학생이 이해할 수 있는 한국어로, 아래 형식으로만 답하세요:
+2. 근거 2~3개를 제시하세요.
+3. {_FLAW_INSERTION_RULE}
+4. 상대 발언을 인용할 때는 한 문장만 짧게 인용하세요.
+5. 중·고등학생이 이해할 수 있는 한국어로, 아래 형식으로만 답하세요:
 【{heading}】
 주장 요약: ...
 핵심 근거:
@@ -251,9 +296,15 @@ class Stage3LangflowClient:
         question: str | None,
         flow_id: str,
     ) -> Stage3LangflowResult:
-        from app.services.stage3_debate import merge_facts, parse_fact_json
+        from app.services.stage3_debate import (
+            MIN_DEBATE_FLAWS,
+            count_flaw_claims,
+            merge_facts,
+            parse_fact_json,
+        )
 
         extra = f"\n학생 질문: {question.strip()}" if question and question.strip() else ""
+        quality = _DEBATE_QUALITY_NOTE
         pro_id = settings.LANGFLOW_STAGE3_PRO_AGENT_ID.strip() or "LM-s3pro"
         con_id = settings.LANGFLOW_STAGE3_CON_AGENT_ID.strip() or "LM-s3con"
 
@@ -267,7 +318,7 @@ class Stage3LangflowClient:
 
         out1 = await self._run_v1_outputs(
             flow_id,
-            f"논제: {topic}\n찬성 측 페르소나: {pro_persona}\n반대 측 페르소나: {con_persona}{extra}\n지금은 입론입니다.",
+            f"{quality}논제: {topic}\n찬성 측 페르소나: {pro_persona}\n반대 측 페르소나: {con_persona}{extra}\n지금은 입론입니다.",
             {
                 pro_id: {
                     "system_message": self._agent_sys(
@@ -294,7 +345,7 @@ class Stage3LangflowClient:
         out2 = await self._run_v1_outputs(
             flow_id,
             (
-                f"논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
+                f"{quality}논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
                 f"【입론 · 반대 측】\n{con_open}\n\n지금은 반론입니다. 반대 에이전트만 발언하세요."
             ),
             {
@@ -315,7 +366,7 @@ class Stage3LangflowClient:
         out3 = await self._run_v1_outputs(
             flow_id,
             (
-                f"논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
+                f"{quality}논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
                 f"【입론 · 반대 측】\n{con_open}\n\n【반론 · 반대 측】\n{con_rebut}\n\n"
                 "지금은 반론입니다. 찬성 에이전트만 발언하세요."
             ),
@@ -337,7 +388,7 @@ class Stage3LangflowClient:
         out4 = await self._run_v1_outputs(
             flow_id,
             (
-                f"논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
+                f"{quality}논제: {topic}\n\n【입론 · 찬성 측】\n{pro_open}\n\n"
                 f"【입론 · 반대 측】\n{con_open}\n\n【반론 · 반대 측】\n{con_rebut}\n\n"
                 f"【반론 · 찬성 측】\n{pro_rebut}\n\n지금은 최종 변론입니다."
             ),
@@ -363,7 +414,6 @@ class Stage3LangflowClient:
         con_close = need(out4, "ChatOutput-s3con", "반대 측 최종 변론")
         pro_close = need(out4, "ChatOutput-s3pro", "찬성 측 최종 변론")
         fact4 = parse_fact_json(out4.get("ChatOutput-s3fact", ""))
-        merged = merge_facts(fact1, fact2, fact3, fact4)
 
         speeches = {
             "pro_open": pro_open,
@@ -373,6 +423,24 @@ class Stage3LangflowClient:
             "con_rerebut": con_close,
             "pro_rerebut": pro_close,
         }
+        merged = merge_facts(fact1, fact2, fact3, fact4)
+        if count_flaw_claims(merged) < MIN_DEBATE_FLAWS:
+            logger.warning(
+                "stage3 debate has fewer than %d flaw claims (%d); running full transcript fact-check",
+                MIN_DEBATE_FLAWS,
+                count_flaw_claims(merged),
+            )
+            supplemental = await self._run_full_transcript_factcheck(
+                flow_id=flow_id,
+                topic=topic,
+                speeches=speeches,
+                fact_persona=fact_persona,
+                pro_persona=pro_persona,
+                con_persona=con_persona,
+            )
+            if supplemental:
+                merged = merge_facts(merged, supplemental)
+
         return Stage3LangflowResult(
             pro_argument=pro_open,
             con_argument=con_open,
@@ -382,6 +450,52 @@ class Stage3LangflowClient:
             speeches=speeches,
             source="langflow",
         )
+
+    _SPEECH_LABELS = {
+        "pro_open": "입론 · 찬성 측",
+        "con_open": "입론 · 반대 측",
+        "con_rebut": "반론 · 반대 측",
+        "pro_rebut": "반론 · 찬성 측",
+        "con_rerebut": "최종 변론 · 반대 측",
+        "pro_rerebut": "최종 변론 · 찬성 측",
+    }
+
+    async def _run_full_transcript_factcheck(
+        self,
+        *,
+        flow_id: str,
+        topic: str,
+        speeches: dict[str, str],
+        fact_persona: str,
+        pro_persona: str,
+        con_persona: str,
+    ) -> dict | None:
+        from app.services.stage3_debate import parse_fact_json
+
+        pro_id = settings.LANGFLOW_STAGE3_PRO_AGENT_ID.strip() or "LM-s3pro"
+        con_id = settings.LANGFLOW_STAGE3_CON_AGENT_ID.strip() or "LM-s3con"
+        fact_id = settings.LANGFLOW_STAGE3_FACT_AGENT_ID.strip() or "LM-s3fact"
+        transcript = "\n\n".join(
+            f"【{self._SPEECH_LABELS.get(role, role)}】\n{text.strip()}"
+            for role, text in speeches.items()
+            if text and text.strip()
+        )
+        out = await self._run_v1_outputs(
+            flow_id,
+            "위 전체 토론 기록을 팩트체크하세요.",
+            {
+                pro_id: {"system_message": self._hold_sys("pro", pro_persona)},
+                con_id: {"system_message": self._hold_sys("con", con_persona)},
+                fact_id: {
+                    "system_message": _FINAL_FACT_PROMPT.format(
+                        persona=fact_persona,
+                        topic=topic.replace('"', "'"),
+                        transcript=transcript,
+                    )
+                },
+            },
+        )
+        return parse_fact_json(out.get("ChatOutput-s3fact", ""))
 
     async def _run_http(
         self,
@@ -554,7 +668,7 @@ class Stage3LangflowClient:
             f"찬성 측 비판: '부정행위 90% 감소'는 근거가 불명확하고 과장일 수 있습니다.\n"
             f"핵심 근거:\n"
             f"1. 얼굴·시선 데이터 수집은 학생 개인정보를 과도하게 침해합니다.\n"
-            f"2. 오탐으로 무고한 학생이 부정행위자로 몰릴 위험이 있습니다.\n"
+            f"2. 전국 학교의 80%가 이미 AI 감독을 도입했다는 보고가 있습니다.\n"
             f"우려되는 점: 감시 문화가 교실 신뢰를 무너뜨릴 수 있습니다."
         )
         rebuttal = (
@@ -603,7 +717,12 @@ class Stage3LangflowClient:
                     "claim": "얼굴·시선 데이터 수집은 학생 개인정보를 과도하게 침해합니다.",
                     "verdict": "supported",
                     "reason": "생체·행동 데이터는 민감정보로 분류되는 경우가 많음",
-                }
+                },
+                {
+                    "claim": "전국 학교의 80%가 이미 AI 감독을 도입했다는 보고가 있습니다.",
+                    "verdict": "false",
+                    "reason": "출처·기관명 없이 전국 도입률을 단정한 수치로 보임",
+                },
             ],
             "reliable_points": [
                 "개인정보·오탐 리스크는 검토할 가치가 있다",

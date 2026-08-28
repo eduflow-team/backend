@@ -138,6 +138,13 @@ class Stage3DebateResponse(BaseModel):
     attempts: Stage3AttemptsDetail
 
 
+class Stage3TeacherPreviewResponse(BaseModel):
+    assignment_id: int
+    reused: bool
+    debate: Stage3DebatePublicPayload
+    elapsed: float | None = None
+
+
 class Stage3FactcheckRequest(BaseModel):
     turn_id: str = Field(..., min_length=1)
 

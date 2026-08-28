@@ -20,6 +20,7 @@ VERDICT_RANK = {
 
 NEEDS_CHECK = frozenset({"exaggerated", "unsupported", "false"})
 PENALIZE_UNNECESSARY_CHECK = True
+MIN_DEBATE_FLAWS = 2
 
 ROUND_META = [
     ("pro_open", "pro-1", "입론 · 찬성 측"),
@@ -152,6 +153,12 @@ def collect_fact_claims(fact: dict | None) -> list[tuple[str, dict]]:
         if claim:
             out.append(("con", claim))
     return out
+
+
+def count_flaw_claims(fact: dict | None) -> int:
+    return sum(
+        1 for _, claim in collect_fact_claims(fact) if str(claim.get("verdict")) in NEEDS_CHECK
+    )
 
 
 def merge_facts(*facts: dict | None) -> dict:

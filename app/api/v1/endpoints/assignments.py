@@ -36,6 +36,7 @@ from app.schemas.stage3 import (
     Stage3SourcesResponse,
     Stage3SubmitRequest,
     Stage3SubmitResponse,
+    Stage3TeacherPreviewResponse,
 )
 from app.schemas.stage2 import (
     Stage2AssignmentDetailResponse,
@@ -519,6 +520,26 @@ async def create_step3_assignment(
     db: AsyncSession = Depends(get_db),
 ) -> Stage3CreateResponse:
     return await Stage3Service(db).create_step3_assignment(user_id, payload)
+
+
+@router.post(
+    "/teacher/assignments/{id}/step3/preview-debate",
+    summary="3단계 교사 토론 미리보기 생성",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage3TeacherPreviewResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+    },
+)
+async def preview_step3_debate(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage3TeacherPreviewResponse:
+    return await Stage3Service(db).preview_step3_debate(user_id, id)
 
 
 @router.post(

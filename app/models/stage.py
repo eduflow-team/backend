@@ -71,6 +71,7 @@ class Stage3AssignmentDetail(Base):
     con_persona: Mapped[str] = mapped_column(String(100), nullable=False)
     fact_persona: Mapped[str | None] = mapped_column(String(100), nullable=True)
     debate_mode: Mapped[str] = mapped_column(String(10), nullable=False, server_default="v2")
+    preview_debate_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True
     )
