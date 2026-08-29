@@ -202,11 +202,55 @@ class Stage3Service:
         remaining = max(0, max_attempts - used)
 
         debate = None
+        grade_result = None
         if in_progress is not None:
             debate = self._to_public_debate(
                 in_progress.debate_payload or {},
                 self._checked_ids(in_progress),
             )
+        else:
+            scored = [row for row in attempts if row.score is not None]
+            if scored:
+                best = max(
+                    scored,
+                    key=lambda row: (row.score or 0, row.attempt_number or 0),
+                )
+                checked = self._checked_ids(best)
+                debate = self._to_public_debate(
+                    best.debate_payload or {},
+                    checked,
+                    reveal_all=True,
+                )
+                if best.submission_id:
+                    evaluation = await self.evaluation_repository.get_by_submission_id(
+                        best.submission_id
+                    )
+                    meta = (
+                        evaluation.evaluation_metadata
+                        if evaluation and evaluation.evaluation_metadata
+                        else None
+                    )
+                    if meta:
+                        grade_result = Stage3SubmitResponse(
+                            current_score=int(best.score or 0),
+                            highest_score=status.best_score or int(best.score or 0),
+                            is_highest_score=True,
+                            caught=int(meta.get("caught", 0)),
+                            passed=int(meta.get("passed", 0)),
+                            missed=int(meta.get("missed", 0)),
+                            wasted=int(meta.get("wasted", 0)),
+                            headline=str(meta.get("headline", "")),
+                            advice=str(meta.get("advice", "")),
+                            rows=[
+                                Stage3GradeRow(**row)
+                                for row in (meta.get("rows") or [])
+                            ],
+                            attempts=Stage3AttemptsDetail(
+                                max_attempts=max_attempts,
+                                used_attempts=used,
+                                remaining_attempts=remaining,
+                            ),
+                        )
 
         return Stage3AssignmentDetailResponse(
             assignment_id=assignment.assignment_id,
@@ -228,6 +272,7 @@ class Stage3Service:
             highest_score=status.best_score,
             due_at=assignment.due_at,
             debate=debate,
+            grade_result=grade_result,
         )
 
     # ------------------------------------------------------------------

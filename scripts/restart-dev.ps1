@@ -2,6 +2,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
+docker compose run --rm backend alembic upgrade heads
 docker compose restart backend
 docker compose ps backend
 

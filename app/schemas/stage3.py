@@ -1,5 +1,7 @@
 """Stage 3 과제 API Request/Response 스키마."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
@@ -109,6 +111,7 @@ class Stage3AssignmentDetailResponse(BaseModel):
     highest_score: int | None = None
     due_at: datetime | None = None
     debate: Stage3DebatePublicPayload | None = None
+    grade_result: Stage3SubmitResponse | None = None
 
     @field_serializer("due_at")
     def serialize_due_at(self, value: datetime | None) -> str | None:
