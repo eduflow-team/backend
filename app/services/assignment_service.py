@@ -1,13 +1,14 @@
 """Stage 1 과제 도메인 비즈니스 로직.
 
-교사: PDF 업로드 + 퀴즈 1문제·정답 1개.
-학생: 자유 채팅으로 근거 탐색 후 본인 답안 제출.
-채점: 정답점수(0|100) − default 대비 리소스 감점(최대 ~30). temperature 감점 없음.
+교사: PDF 업로드 + 서술형 문제 1개·정답 키포인트 3개.
+학생: 자유 채팅으로 근거 탐색 후 보고서형 답안 제출.
+채점: 키포인트 충족 점수(0~100) − default 대비 리소스 감점(최대 ~30).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import UTC, datetime
@@ -64,6 +65,7 @@ from app.schemas.assignments import (
     Stage1EvaluationReport,
     Stage1FinalizeRequest,
     Stage1FinalizeResponse,
+    Stage1KeypointResult,
     Stage1Parameters,
     Stage1SubmitRequest,
     Stage1SubmitResponse,
@@ -122,7 +124,7 @@ class AssignmentService:
         class_id: int,
         subject: str,
         question: str,
-        answer: str,
+        answer_keypoints: str | list[str],
         due_at: datetime,
         file: UploadFile,
     ) -> Stage1CreateResponse:
@@ -133,10 +135,15 @@ class AssignmentService:
 
         subject = (subject or "").strip()
         question = (question or "").strip()
-        answer = (answer or "").strip()
+        keypoints = self._normalize_keypoints(answer_keypoints)
+        expected = int(settings.STAGE1_ANSWER_KEYPOINT_COUNT)
         filename = (file.filename or "").strip()
-        if not subject or not filename or not question or not answer:
+        if not subject or not filename or not question:
             raise InvalidStage1CreateError()
+        if len(keypoints) != expected:
+            raise InvalidStage1CreateError(
+                f"정답 키포인트는 정확히 {expected}개여야 합니다."
+            )
 
         due_at = normalize_assignment_due_at(due_at)
         default_chunk_size = settings.STAGE1_DEFAULT_CHUNK_SIZE
@@ -170,7 +177,7 @@ class AssignmentService:
         assignment = Assignment(
             teacher_id=teacher.user_id,
             class_id=class_id,
-            title="1단계: 파라미터로 과제 문제 풀기",
+            title="1단계: 근거 탐색 후 보고서 작성",
             stage=1,
             subject=subject,
             description=question,
@@ -187,7 +194,7 @@ class AssignmentService:
         detail = Stage1AssignmentDetail(
             assignment_id=assignment.assignment_id,
             question=question,
-            answer=answer,
+            answer=self._serialize_keypoints(keypoints),
             default_parameters=default_parameters,
             parameter_guide=PARAMETER_EXPLANATIONS.model_dump(),
         )
@@ -266,8 +273,11 @@ class AssignmentService:
         is_finalized = final_submission is not None or (
             status.progress_status == ProgressStatus.COMPLETED.value
         )
+        revealed = self._is_answer_revealed(assignment.due_at)
         attempt_summaries = await self._build_attempt_summaries(
-            scored_attempts, final_submission_id=final_submission.submission_id if final_submission else None
+            scored_attempts,
+            final_submission_id=final_submission.submission_id if final_submission else None,
+            revealed=revealed,
         )
         final_attempt_number = next(
             (s.attempt_number for s in attempt_summaries if s.is_final), None
@@ -301,7 +311,7 @@ class AssignmentService:
             limit = settings.STAGE1_DOCUMENT_TEXT_MAX_CHARS
             document_text = raw[:limit] if raw else None
 
-        revealed = self._is_answer_revealed(assignment.due_at)
+        keypoints = self._parse_keypoints(detail.answer)
         return Stage1AssignmentDetailResponse(
             assignment_id=assignment.assignment_id,
             question=detail.question or "",
@@ -322,7 +332,9 @@ class AssignmentService:
             document_url=document_url,
             document_text=document_text,
             is_answer_revealed=revealed,
-            correct_answer=(detail.answer if revealed else None),
+            correct_answer=(self._format_keypoints_for_display(keypoints) if revealed else None),
+            answer_keypoints=(keypoints if revealed else None),
+            answer_keypoint_count=int(settings.STAGE1_ANSWER_KEYPOINT_COUNT),
         )
 
     async def get_step1_document(
@@ -459,8 +471,12 @@ class AssignmentService:
             raise Stage1AlreadyFinalizedError()
 
         default_params = self._parse_parameters(detail.default_parameters)
-        is_correct = self._answers_match(student_answer, correct_answer)
-        correct_score = 100 if is_correct else 0
+        keypoints = self._parse_keypoints(correct_answer)
+        if not keypoints:
+            raise AssignmentNotFoundError("과제 정답 키포인트가 설정되지 않았습니다.")
+        grade = self._grade_keypoints(student_answer, keypoints)
+        is_correct = grade["is_correct"]
+        correct_score = int(grade["correct_score"])
         resource_penalty, penalty_meta = self._resource_penalty_points(
             default=default_params,
             submitted=params,
@@ -470,6 +486,9 @@ class AssignmentService:
             is_correct=is_correct,
             correct_score=correct_score,
             resource_penalty=resource_penalty,
+            matched_keypoints=int(grade["matched_keypoints"]),
+            total_keypoints=int(grade["total_keypoints"]),
+            keypoint_results=grade["keypoint_results"],
         )
 
         submission = Submission(
@@ -506,6 +525,11 @@ class AssignmentService:
                 "is_correct": is_correct,
                 "correct_score": correct_score,
                 "resource_penalty": resource_penalty,
+                "matched_keypoints": int(grade["matched_keypoints"]),
+                "total_keypoints": int(grade["total_keypoints"]),
+                "keypoint_results": [
+                    r.model_dump() for r in grade["keypoint_results"]
+                ],
                 "summary": report.feedback,
                 **penalty_meta,
             },
@@ -574,25 +598,35 @@ class AssignmentService:
             student.user_id, assignment_id
         )
         scored_all = [a for a in all_attempts if a.score is not None]
+        revealed = self._is_answer_revealed(assignment.due_at)
         attempt_summaries = await self._build_attempt_summaries(
             scored_all,
             final_submission_id=final_submission_id,
+            revealed=revealed,
         )
 
-        revealed = self._is_answer_revealed(assignment.due_at)
+        public_report = report.model_copy(
+            update={
+                "keypoint_results": self._redact_keypoint_results_for_student(
+                    list(report.keypoint_results), revealed=revealed
+                )
+            }
+        )
         return Stage1SubmitResponse(
             current_score=current_score,
             highest_score=new_best,
             is_highest_score=is_highest,
             is_correct=is_correct,
-            evaluation_report=report,
+            evaluation_report=public_report,
             attempts=Stage1AttemptsInfo(
                 used_attempts=attempt_number,
                 remaining_attempts=remaining,
             ),
             attempt_summaries=attempt_summaries,
             is_finalized=should_finalize,
-            correct_answer=(correct_answer if revealed else None),
+            correct_answer=(
+                self._format_keypoints_for_display(keypoints) if revealed else None
+            ),
         )
 
     async def finalize_step1(
@@ -675,33 +709,57 @@ class AssignmentService:
                 is_correct=is_correct,
                 correct_score=correct_score,
                 resource_penalty=resource_penalty,
+                matched_keypoints=int(meta.get("matched_keypoints", 0)) if meta else 0,
+                total_keypoints=int(meta.get("total_keypoints", 0)) if meta else 0,
             ).feedback
         )
+        keypoint_results_raw = meta.get("keypoint_results") if meta else None
+        keypoint_results: list[Stage1KeypointResult] = []
+        if isinstance(keypoint_results_raw, list):
+            for item in keypoint_results_raw:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    keypoint_results.append(Stage1KeypointResult.model_validate(item))
+                except Exception:  # noqa: BLE001
+                    continue
         report = Stage1EvaluationReport(
             is_correct=is_correct,
             correct_score=correct_score,
             resource_penalty=resource_penalty,
             feedback=feedback,
+            matched_keypoints=int(meta.get("matched_keypoints", 0)) if meta else 0,
+            total_keypoints=int(meta.get("total_keypoints", 0)) if meta else 0,
+            keypoint_results=keypoint_results,
         )
 
-        attempt_summaries = await self._build_attempt_summaries(
-            scored, final_submission_id=chosen.submission_id
-        )
         revealed = self._is_answer_revealed(assignment.due_at)
-        correct_answer = (detail.answer or "").strip()
+        attempt_summaries = await self._build_attempt_summaries(
+            scored, final_submission_id=chosen.submission_id, revealed=revealed
+        )
+        keypoints = self._parse_keypoints(detail.answer)
+        public_report = report.model_copy(
+            update={
+                "keypoint_results": self._redact_keypoint_results_for_student(
+                    keypoint_results, revealed=revealed
+                )
+            }
+        )
         return Stage1FinalizeResponse(
             attempt_number=int(chosen.attempt_number or payload.attempt_number),
             current_score=chosen_score,
             highest_score=chosen_score,
             is_correct=is_correct,
-            evaluation_report=report,
+            evaluation_report=public_report,
             attempts=Stage1AttemptsInfo(
                 used_attempts=used,
                 remaining_attempts=remaining,
             ),
             attempt_summaries=attempt_summaries,
             is_finalized=True,
-            correct_answer=(correct_answer if revealed else None),
+            correct_answer=(
+                self._format_keypoints_for_display(keypoints) if revealed else None
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -713,6 +771,7 @@ class AssignmentService:
         scored_attempts: list[Stage1Attempt],
         *,
         final_submission_id: int | None = None,
+        revealed: bool = False,
     ) -> list[Stage1AttemptSummary]:
         summaries: list[Stage1AttemptSummary] = []
         for attempt in scored_attempts:
@@ -721,6 +780,9 @@ class AssignmentService:
             correct_score = 0
             resource_penalty = 0
             feedback = ""
+            matched_keypoints = 0
+            total_keypoints = 0
+            keypoint_results: list[Stage1KeypointResult] = []
             if attempt.submission_id is not None:
                 evaluation = await self.evaluation_repository.get_by_submission_id(
                     attempt.submission_id
@@ -730,6 +792,17 @@ class AssignmentService:
                     is_correct = bool(meta.get("is_correct"))
                     correct_score = int(meta.get("correct_score", 0))
                     resource_penalty = int(meta.get("resource_penalty", 0))
+                    matched_keypoints = int(meta.get("matched_keypoints", 0))
+                    total_keypoints = int(meta.get("total_keypoints", 0))
+                    raw_results = meta.get("keypoint_results") or []
+                    if isinstance(raw_results, list):
+                        for item in raw_results:
+                            if not isinstance(item, dict):
+                                continue
+                            try:
+                                keypoint_results.append(Stage1KeypointResult.model_validate(item))
+                            except Exception:  # noqa: BLE001
+                                continue
                 if evaluation and evaluation.feedback:
                     feedback = evaluation.feedback
                 else:
@@ -737,6 +810,9 @@ class AssignmentService:
                         is_correct=is_correct,
                         correct_score=correct_score,
                         resource_penalty=resource_penalty,
+                        matched_keypoints=matched_keypoints,
+                        total_keypoints=total_keypoints,
+                        keypoint_results=keypoint_results,
                     ).feedback
             summaries.append(
                 Stage1AttemptSummary(
@@ -751,6 +827,11 @@ class AssignmentService:
                     is_final=(
                         final_submission_id is not None
                         and attempt.submission_id == final_submission_id
+                    ),
+                    matched_keypoints=matched_keypoints,
+                    total_keypoints=total_keypoints,
+                    keypoint_results=self._redact_keypoint_results_for_student(
+                        keypoint_results, revealed=revealed
                     ),
                 )
             )
@@ -877,6 +958,7 @@ class AssignmentService:
         return now >= compare.astimezone(UTC)
 
     @staticmethod
+    @staticmethod
     def _normalize_answer(text: str) -> str:
         """공백·구두점 정리 후 소문자 비교용 문자열."""
         normalized = (text or "").strip().casefold()
@@ -885,10 +967,80 @@ class AssignmentService:
         return normalized
 
     @classmethod
-    def _answers_match(cls, student_answer: str, correct_answer: str) -> bool:
-        return cls._normalize_answer(student_answer) == cls._normalize_answer(
-            correct_answer
-        )
+    def _normalize_keypoints(cls, raw: str | list[str] | None) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, list):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        text = str(raw).strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except json.JSONDecodeError:
+                pass
+        if "\n" in text:
+            return [line.strip() for line in text.splitlines() if line.strip()]
+        return [text]
+
+    @classmethod
+    def _parse_keypoints(cls, stored_answer: str | None) -> list[str]:
+        return cls._normalize_keypoints(stored_answer)
+
+    @staticmethod
+    def _serialize_keypoints(keypoints: list[str]) -> str:
+        return json.dumps(keypoints, ensure_ascii=False)
+
+    @staticmethod
+    def _format_keypoints_for_display(keypoints: list[str]) -> str:
+        return "\n".join(f"{i}. {kp}" for i, kp in enumerate(keypoints, start=1))
+
+    @classmethod
+    def _keypoint_tokens(cls, text: str) -> list[str]:
+        return re.findall(r"[0-9A-Za-z가-힣]{2,}", text or "")
+
+    @classmethod
+    def _keypoint_matched(cls, student_answer: str, keypoint: str) -> bool:
+        student_norm = cls._normalize_answer(student_answer)
+        kp_norm = cls._normalize_answer(keypoint)
+        if not student_norm or not kp_norm:
+            return False
+        if kp_norm in student_norm:
+            return True
+        tokens = cls._keypoint_tokens(keypoint)
+        if not tokens:
+            return False
+        hit = 0
+        for token in tokens:
+            token_norm = cls._normalize_answer(token)
+            if token_norm and token_norm in student_norm:
+                hit += 1
+        ratio = hit / len(tokens)
+        return ratio >= float(settings.STAGE1_KEYPOINT_TOKEN_HIT_RATIO)
+
+    @classmethod
+    def _grade_keypoints(cls, student_answer: str, keypoints: list[str]) -> dict:
+        results: list[Stage1KeypointResult] = []
+        matched = 0
+        for index, keypoint in enumerate(keypoints, start=1):
+            ok = cls._keypoint_matched(student_answer, keypoint)
+            if ok:
+                matched += 1
+            results.append(
+                Stage1KeypointResult(index=index, keypoint=keypoint, matched=ok)
+            )
+        total = len(keypoints)
+        correct_score = int(round(100 * matched / total)) if total else 0
+        return {
+            "is_correct": matched == total and total > 0,
+            "correct_score": correct_score,
+            "matched_keypoints": matched,
+            "total_keypoints": total,
+            "keypoint_results": results,
+        }
 
     def _resource_penalty_points(
         self,
@@ -936,30 +1088,65 @@ class AssignmentService:
         is_correct: bool,
         correct_score: int,
         resource_penalty: int,
+        matched_keypoints: int = 0,
+        total_keypoints: int = 0,
+        keypoint_results: list[Stage1KeypointResult] | None = None,
     ) -> Stage1EvaluationReport:
+        results = keypoint_results or []
+        if total_keypoints <= 0:
+            coverage = ""
+        else:
+            coverage = f"핵심 요점 {matched_keypoints}/{total_keypoints}개를 반영했습니다."
+
         if is_correct and resource_penalty == 0:
-            feedback = "정답입니다. 기본 파라미터 근처에서 잘 해결했습니다."
+            feedback = f"모든 핵심 요점을 잘 정리했습니다. {coverage}".strip()
         elif is_correct and resource_penalty > 0:
             feedback = (
-                f"정답입니다. 다만 기본값보다 검색 자원을 많이 써서 "
+                f"모든 핵심 요점을 맞혔습니다. 다만 기본값보다 검색 자원을 많이 써서 "
                 f"{resource_penalty}점이 감점되었습니다."
             )
-        elif not is_correct and resource_penalty > 0:
+        elif matched_keypoints > 0:
             feedback = (
-                "오답입니다. 파라미터를 조절해 자료에서 근거를 더 찾아보세요. "
-                f"(기본값보다 자원을 많이 써서 {resource_penalty}점도 감점되었습니다.)"
+                f"{coverage} 아직 반영되지 않은 요점이 있어요. "
+                "파라미터를 조절해 자료를 더 찾아 보완해 보세요."
             )
+            if resource_penalty > 0:
+                feedback += f" (자원 감점 {resource_penalty}점)"
         else:
             feedback = (
-                "오답입니다. AI와 대화하며 파라미터를 조절해 "
-                "자료에서 근거를 찾아 다시 제출해 보세요."
+                "핵심 요점이 답안에 잘 드러나지 않습니다. "
+                "AI와 대화하며 근거를 모은 뒤, 요점을 번호로 나눠 다시 작성해 보세요."
             )
+            if resource_penalty > 0:
+                feedback += f" (자원 감점 {resource_penalty}점)"
+
         return Stage1EvaluationReport(
             is_correct=is_correct,
             correct_score=correct_score,
             resource_penalty=resource_penalty,
             feedback=feedback,
+            matched_keypoints=matched_keypoints,
+            total_keypoints=total_keypoints,
+            keypoint_results=results,
         )
+
+    @staticmethod
+    def _redact_keypoint_results_for_student(
+        results: list[Stage1KeypointResult],
+        *,
+        revealed: bool,
+    ) -> list[Stage1KeypointResult]:
+        """마감 전에는 미반영 요점 문구를 숨겨 정답 누출을 막는다."""
+        if revealed:
+            return results
+        return [
+            Stage1KeypointResult(
+                index=r.index,
+                keypoint=r.keypoint if r.matched else "",
+                matched=r.matched,
+            )
+            for r in results
+        ]
 
     @staticmethod
     def _chunk_size_from_metadata(metadata: dict | None) -> int | None:

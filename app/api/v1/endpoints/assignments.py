@@ -276,20 +276,23 @@ async def submit_step2_correction(
 async def create_step1_assignment(
     class_id: int = Form(..., description="과제를 배정할 학급 ID"),
     subject: str = Form(...),
-    question: str = Form(..., description="학생이 풀 퀴즈 문제 1개"),
-    answer: str = Form(..., description="정답 1개 (교과서 표현)"),
+    question: str = Form(..., description="학생이 풀 서술형 문제 1개"),
+    answer_keypoints: str = Form(
+        ...,
+        description='정답 키포인트 JSON 배열 (길이 3). 예: ["토지 조사 사업","산미 증식 계획","무단 통치"]',
+    ),
     due_at: datetime = Form(..., description="마감 일시 (ISO 8601)"),
     file: UploadFile = File(...),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> Stage1CreateResponse:
-    """교사 문제·정답 + 학습 자료 업로드. 시작 파라미터는 서버 고정(50/2/1.0)."""
+    """교사 문제·정답 키포인트 3개 + 학습 자료 업로드. 시작 파라미터는 서버 고정(50/2/1.0)."""
     return await AssignmentService(db).create_step1_assignment(
         user_id,
         class_id=class_id,
         subject=subject,
         question=question,
-        answer=answer,
+        answer_keypoints=answer_keypoints,
         due_at=due_at,
         file=file,
     )

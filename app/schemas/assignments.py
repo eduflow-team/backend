@@ -53,7 +53,16 @@ class Stage1SubmitRequest(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("student_answer는 비어 있을 수 없습니다.")
+        min_chars = int(settings.STAGE1_MIN_STUDENT_ANSWER_CHARS)
+        if len(stripped) < min_chars:
+            raise ValueError(f"답안은 {min_chars}자 이상 작성해 주세요.")
         return stripped
+
+
+class Stage1KeypointResult(BaseModel):
+    index: int
+    keypoint: str
+    matched: bool
 
 
 class Stage1EvaluationReport(BaseModel):
@@ -61,6 +70,9 @@ class Stage1EvaluationReport(BaseModel):
     correct_score: int
     resource_penalty: int
     feedback: str
+    matched_keypoints: int = 0
+    total_keypoints: int = 0
+    keypoint_results: list[Stage1KeypointResult] = Field(default_factory=list)
 
 
 class Stage1AttemptsInfo(BaseModel):
@@ -78,6 +90,9 @@ class Stage1AttemptSummary(BaseModel):
     student_answer: str
     parameters: Stage1Parameters
     is_final: bool = False
+    matched_keypoints: int = 0
+    total_keypoints: int = 0
+    keypoint_results: list[Stage1KeypointResult] = Field(default_factory=list)
 
 
 class Stage1SubmitResponse(BaseModel):
@@ -139,6 +154,8 @@ class Stage1AssignmentDetailResponse(BaseModel):
     # 마감 전 False. True일 때만 correct_answer 채움
     is_answer_revealed: bool = False
     correct_answer: str | None = None
+    answer_keypoints: list[str] | None = None
+    answer_keypoint_count: int = Field(default=3)
 
     @field_serializer("due_at")
     def serialize_due_at(self, value: datetime | None) -> str | None:

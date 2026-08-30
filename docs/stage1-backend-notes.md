@@ -7,19 +7,20 @@
 
 | Method | Path | 비고 |
 |--------|------|------|
-| POST | `/teacher/assignments/step1` | multipart: `question`, `answer`, defaults, `file`, `due_at` … |
-| GET | `/student/assignments/{id}/step1` | 문제·자료텍스트·파라미터. 정답은 **마감 후**만 |
+| POST | `/teacher/assignments/step1` | multipart: `question`, `answer_keypoints`(JSON 3개), `file`, `due_at` … |
+| GET | `/student/assignments/{id}/step1` | 문제·자료텍스트·파라미터. 키포인트는 **마감 후**만 |
 | POST | `/student/assignments/{id}/step1/chat` | 자유 `message` + 파라미터. chunk preview 포함 |
 | POST | `/student/assignments/{id}/step1/submit` | `student_answer` + `final_parameters` |
 
 ### create Form
-`class_id`, `subject`, `question`, `answer`, `due_at`, `file`  
+`class_id`, `subject`, `question`, `answer_keypoints`(JSON 문자열 배열 3개), `due_at`, `file`  
 시작 파라미터는 서버 고정: **chunk 50 · top_k 2 · temperature 1.0** (`STAGE1_DEFAULT_*`)
 
 ### submit Body
 ```json
 { "final_parameters": { "chunk_size", "top_k", "temperature" }, "student_answer": "..." }
 ```
+답안 최소 길이: `STAGE1_MIN_STUDENT_ANSWER_CHARS`(기본 20)
 
 ### chat visualization
 `total_chunks`, `retrieved_chunks`, `vector_search_score`, `retrieved_chunk_previews`, `approx_context_chars`
@@ -28,9 +29,9 @@
 
 - 제출 **2회** (`STAGE1_MAX_ATTEMPTS=2`)
 - `final = max(0, correct_score − resource_penalty)`
-  - 맞춤 → correct 100 / 틀림 → 0 (정규화 후 완전일치)
+  - 키포인트 N개 중 반영된 비율 → `correct_score` (전부 맞으면 100, `is_correct`)
   - 리소스 감점: 교사 **default**보다 키운 `top_k`·`chunk_size`만 (`w=0.3`, 최대 ~30). temperature 제외
-- 정답 문자열: 마감 전에는 API에 미포함
+- 정답 키포인트: 마감 전에는 API에 미포함 (`answer` 컬럼에 JSON 저장)
 
 ## PDF / OCR
 

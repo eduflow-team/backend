@@ -52,12 +52,18 @@ class Settings(BaseSettings):
     STAGE1_DEFAULT_CHUNK_SIZE: int = 50
     STAGE1_DEFAULT_TOP_K: int = 2
     STAGE1_DEFAULT_TEMPERATURE: float = 1.0
-    # 최종 = 정답점수(0|100) − w×resource_penalty(0~100). temperature 감점 없음.
+    # 최종 = 키포인트 점수(0~100) − w×resource_penalty(0~100). temperature 감점 없음.
     STAGE1_RESOURCE_PENALTY_WEIGHT: float = 0.3  # 최대 약 30점 감점
     STAGE1_K_SCALE: int = 6  # default top_k 대비 +6이면 top_k 축 만땅
     STAGE1_CHUNK_SCALE: int = 3  # preset 3단계 올리면 chunk 축 만땅
     STAGE1_RESOURCE_TOP_K_WEIGHT: float = 0.6
     STAGE1_RESOURCE_CHUNK_WEIGHT: float = 0.4
+    # 교사 정답 키포인트 개수 (예: "3가지를 적으시오")
+    STAGE1_ANSWER_KEYPOINT_COUNT: int = 3
+    # 키포인트 토큰 중 이 비율 이상 포함되면 해당 요점 인정
+    STAGE1_KEYPOINT_TOKEN_HIT_RATIO: float = 0.6
+    # 학생 보고서형 답안 최소 글자 수
+    STAGE1_MIN_STUDENT_ANSWER_CHARS: int = 20
     # 학생 detail에 내려줄 추출 텍스트 상한(문자)
     STAGE1_DOCUMENT_TEXT_MAX_CHARS: int = 80_000
     # 이미지 PDF OCR: pypdf 텍스트가 빈약하면 활성화
