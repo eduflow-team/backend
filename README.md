@@ -12,22 +12,22 @@
 
 ## 빠른 시작
 
-환경 설정
-
 ```bash
+# 1. 저장소 클론
+git clone https://github.com/eduflow-team/backend.git
+cd backend
+
+# 2. 환경 변수 파일 생성
 cp .env.example .env
-```
 
-서버 실행
-
-```bash
+# 3. 서버 실행
 docker compose up -d --build
-```
 
-마이그레이션
-
-```bash
+# 4. 마이그레이션
 docker compose exec backend alembic upgrade head
+
+# 5. API 문서 접속
+open http://localhost:8000/docs
 ```
 
 </div>
