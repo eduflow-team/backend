@@ -12,6 +12,14 @@
 
 </div>
 
+## Architecture
+
+<!-- 아키텍처 다이어그램: docs/architecture.png 추가 후 아래 주석 해제
+<div align="center">
+  <img src="docs/architecture.png" alt="EduFlow Backend architecture" width="720" />
+</div>
+-->
+
 ## 빠른 시작
 
 ```bash
