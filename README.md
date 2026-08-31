@@ -10,6 +10,8 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white&labelColor=222222)](https://www.postgresql.org/)
 [![pgvector](https://img.shields.io/badge/pgvector-vector-222222?style=flat-square&labelColor=222222)](https://github.com/pgvector/pgvector)
 
+</div>
+
 ## 빠른 시작
 
 ```bash
@@ -29,5 +31,3 @@ docker compose exec backend alembic upgrade head
 # 5. API 문서 접속
 open http://localhost:8000/docs
 ```
-
-</div>
