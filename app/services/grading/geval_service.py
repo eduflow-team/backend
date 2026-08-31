@@ -1,4 +1,4 @@
-"""G-Eval 기반 LLM-as-judge 채점 (Langflow 미사용)."""
+﻿"""G-Eval 湲곕컲 LLM-as-judge 梨꾩젏 (Langflow 誘몄궗??."""
 
 from __future__ import annotations
 
@@ -14,44 +14,38 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _REASONING_RUBRIC = """\
-평가 기준(reasoning_quality): 학생이 문서 근거를 들어 AI 오류가 왜 환각인지 설명했는가,
-선택한 환각 유형과 논리가 맞는가.
+?됯? 湲곗?(reasoning_quality): ?숈깮??臾몄꽌 洹쇨굅瑜??ㅼ뼱 AI ?ㅻ쪟媛 ???섍컖?몄? ?ㅻ챸?덈뒗媛,
+?좏깮???섍컖 ?좏삎怨??쇰━媛 留욌뒗媛.
 
-평가 단계:
-1) student_reason이 reference_document·evidence_sentence와 연결되는가
-2) hallucination_reason과 논리적으로 일치하는가
-3) student_error_type과 설명이 맞는가
-4) 1~5점 부여
-
-점수 가이드 (중·고등 교육용):
-- 5점: 문서 근거 인용 + 환각 유형 + 이유가 모두 명확
-- 4점: 근거와 유형은 타당하나 설명이 다소 짧음
-- 3점: 근거 또는 유형 중 하나만 부분적으로 맞음
-- 1~2점: 근거 없음 또는 유형 불일치
-
-참고: 하이라이트 위치와 환각 유형은 시스템에서 이미 맞다고 판정되었습니다.
-student_reason이 evidence_sentence·hallucination_reason을 활용해 논리를 설명했는지에 집중하세요.
-evidence_sentence가 PDF 추출 조각이어도 student_reason이 그 내용을 인용·연결했다면 4점 이상을 부여하세요.
+?됯? ?④퀎:
+1) student_reason??reference_document쨌evidence_sentence? ?곌껐?섎뒗媛
+2) hallucination_reason怨??쇰━?곸쑝濡??쇱튂?섎뒗媛
+3) student_error_type怨??ㅻ챸??留욌뒗媛
+4) 1~5??遺??
+?먯닔 媛?대뱶 (以뫢룰퀬??援먯쑁??:
+- 5?? 臾몄꽌 洹쇨굅 ?몄슜 + ?섍컖 ?좏삎 + ?댁쑀媛 紐⑤몢 紐낇솗
+- 4?? 洹쇨굅? ?좏삎? ??뱁븯???ㅻ챸???ㅼ냼 吏㏃쓬
+- 3?? 洹쇨굅 ?먮뒗 ?좏삎 以??섎굹留?遺遺꾩쟻?쇰줈 留욎쓬
+- 1~2?? 洹쇨굅 ?놁쓬 ?먮뒗 ?좏삎 遺덉씪移?
+李멸퀬: ?섏씠?쇱씠???꾩튂? ?섍컖 ?좏삎? ?쒖뒪?쒖뿉???대? 留욌떎怨??먯젙?섏뿀?듬땲??
+student_reason??evidence_sentence쨌hallucination_reason???쒖슜???쇰━瑜??ㅻ챸?덈뒗吏??吏묒쨷?섏꽭??
+evidence_sentence媛 PDF 異붿텧 議곌컖?댁뼱??student_reason??洹??댁슜???몄슜쨌?곌껐?덈떎硫?4???댁긽??遺?ы븯?몄슂.
 """
 
 _CORRECTION_RUBRIC = """\
-평가 기준:
-- factual_accuracy: student_answer가 correct_sentence·reference_document에 사실적으로 부합하는가
-- completeness: original_highlight 오류 구간이 의미상 충분히 교정되었는가
+?됯? 湲곗?:
+- factual_accuracy: student_answer媛 correct_sentence쨌reference_document???ъ떎?곸쑝濡?遺?⑺븯?붽?
+- completeness: original_highlight ?ㅻ쪟 援ш컙???섎???異⑸텇??援먯젙?섏뿀?붽?
 
-평가 단계:
-1) student_answer가 correct_sentence와 **의미상 동일하거나 포함 관계**이면 factual_accuracy는 4~5
-2) student_answer가 reference_document·evidence_sentence와 모순되지 않으면 factual_accuracy 가산
-3) original_highlight의 잘못된 주장이 사라지고 올바른 사실로 바뀌었는지 completeness 판단
-4) factual_accuracy, completeness 각각 1~5 정수 부여
-
-점수 가이드 (중·고등 교육용):
-- factual_accuracy 5: correct_sentence와 사실·표현이 거의 같음
-- factual_accuracy 4: 핵심 사실은 맞고 표현만 다름
-- factual_accuracy 3: 일부 맞으나 중요한 사실 누락·오류
-- completeness 5: 오류 구간이 완전히 교정됨
-- completeness 4: 핵심 오류는 제거되었으나 부연 설명이 부족
-"""
+?됯? ?④퀎:
+1) student_answer媛 correct_sentence? **?섎????숈씪?섍굅???ы븿 愿怨?*?대㈃ factual_accuracy??4~5
+2) student_answer媛 reference_document쨌evidence_sentence? 紐⑥닚?섏? ?딆쑝硫?factual_accuracy 媛??3) original_highlight???섎せ??二쇱옣???щ씪吏怨??щ컮瑜??ъ떎濡?諛붾뚯뿀?붿? completeness ?먮떒
+4) factual_accuracy, completeness 媛곴컖 1~5 ?뺤닔 遺??
+?먯닔 媛?대뱶 (以뫢룰퀬??援먯쑁??:
+- factual_accuracy 5: correct_sentence? ?ъ떎쨌?쒗쁽??嫄곗쓽 媛숈쓬
+- factual_accuracy 4: ?듭떖 ?ъ떎? 留욊퀬 ?쒗쁽留??ㅻ쫫
+- factual_accuracy 3: ?쇰? 留욎쑝??以묒슂???ъ떎 ?꾨씫쨌?ㅻ쪟
+- completeness 5: ?ㅻ쪟 援ш컙???꾩쟾??援먯젙??- completeness 4: ?듭떖 ?ㅻ쪟???쒓굅?섏뿀?쇰굹 遺???ㅻ챸??遺議?"""
 
 
 @dataclass(frozen=True)
@@ -97,8 +91,8 @@ class GEvalService:
             return ReasoningEvaluation(
                 reasoning_score=0.0,
                 ai_feedback=(
-                    "하이라이트한 구간이 오류 위치와 맞지 않습니다. "
-                    "AI 답변에서 문서와 다른 표현을 다시 찾아보세요."
+                    "?섏씠?쇱씠?명븳 援ш컙???ㅻ쪟 ?꾩튂? 留욎? ?딆뒿?덈떎. "
+                    "AI ?듬??먯꽌 臾몄꽌? ?ㅻⅨ ?쒗쁽???ㅼ떆 李얠븘蹂댁꽭??"
                 ),
             )
 
@@ -106,9 +100,9 @@ class GEvalService:
             return ReasoningEvaluation(
                 reasoning_score=0.0,
                 ai_feedback=(
-                    "환각 유형 선택이 맞지 않습니다. "
-                    "페르소나 편향·정보 날조·잘못된 문서 검색 중 어떤 유형인지 "
-                    "다시 생각해 보세요."
+                    "?섍컖 ?좏삎 ?좏깮??留욎? ?딆뒿?덈떎. "
+                    "?섎Ⅴ?뚮굹 ?명뼢쨌?뺣낫 ?좎“쨌?섎せ??臾몄꽌 寃??以??대뼡 ?좏삎?몄? "
+                    "?ㅼ떆 ?앷컖??蹂댁꽭??"
                 ),
             )
 
@@ -165,11 +159,11 @@ class GEvalService:
             f"hallucination_reason: {hallucination_reason}\n"
             f"evidence_sentence: {evidence_sentence}\n"
             f"reference_document:\n{doc_preview}\n\n"
-            'JSON만 출력: {"rating": 1-5 정수, "feedback": "한국어 2~3문장"}'
+            'JSON留?異쒕젰: {"rating": 1-5 ?뺤닔, "feedback": "?쒓뎅??2~3臾몄옣"}'
         )
         parsed = await _request_geval_json(
             llm_config=llm_config,
-            system_prompt="교육용 채점 judge. 요청한 JSON만 출력.",
+            system_prompt="援먯쑁??梨꾩젏 judge. ?붿껌??JSON留?異쒕젰.",
             user_prompt=prompt,
         )
         rating = max(1, min(5, int(parsed.get("rating", 1))))
@@ -187,15 +181,15 @@ class GEvalService:
         evidence_sentence: str,
         reference_document: str,
     ) -> ReasoningEvaluation:
-        """LLM judge 미설정 시 키워드 겹침 기반 추정 (smoke test·로컬용)."""
+        """LLM judge 誘몄꽕?????ㅼ썙??寃뱀묠 湲곕컲 異붿젙 (smoke test쨌濡쒖뺄??."""
 
         reason_tokens = _tokenize(student_reason)
         if len(reason_tokens) < 3:
             return ReasoningEvaluation(
                 reasoning_score=0.2,
                 ai_feedback=(
-                    "이유 설명이 너무 짧습니다. 참고 문서의 어떤 내용과 "
-                    "AI 답변이 다른지 구체적으로 적어 보세요."
+                    "?댁쑀 ?ㅻ챸???덈Т 吏㏃뒿?덈떎. 李멸퀬 臾몄꽌???대뼡 ?댁슜怨?"
+                    "AI ?듬????ㅻⅨ吏 援ъ껜?곸쑝濡??곸뼱 蹂댁꽭??"
                 ),
             )
 
@@ -210,8 +204,8 @@ class GEvalService:
         ):
             score = 1.0
             feedback = (
-                "완벽합니다! 원본 문서에 없는 내용이 개입된 환각을 정확히 찾아내셨고, "
-                "환각 유형과 이유 설명도 타당합니다."
+                "?꾨꼍?⑸땲?? ?먮낯 臾몄꽌???녿뒗 ?댁슜??媛쒖엯???섍컖???뺥솗??李얠븘?댁뀲怨? "
+                "?섍컖 ?좏삎怨??댁쑀 ?ㅻ챸????뱁빀?덈떎."
             )
             return ReasoningEvaluation(reasoning_score=score, ai_feedback=feedback)
 
@@ -222,20 +216,20 @@ class GEvalService:
         if rating >= 5:
             score = 1.0
             feedback = (
-                "완벽합니다! 원본 문서에 없는 내용이 개입된 환각을 정확히 찾아내셨고, "
-                "환각 유형과 이유 설명도 타당합니다."
+                "?꾨꼍?⑸땲?? ?먮낯 臾몄꽌???녿뒗 ?댁슜??媛쒖엯???섍컖???뺥솗??李얠븘?댁뀲怨? "
+                "?섍컖 ?좏삎怨??댁쑀 ?ㅻ챸????뱁빀?덈떎."
             )
         elif rating >= 4:
             score = 0.8
             feedback = (
-                "문서 근거를 일부 들었습니다. 어떤 문장이 AI 답변과 "
-                "왜 다른지 한 문장 더 보완해 보세요."
+                "臾몄꽌 洹쇨굅瑜??쇰? ?ㅼ뿀?듬땲?? ?대뼡 臾몄옣??AI ?듬?怨?"
+                "???ㅻⅨ吏 ??臾몄옣 ??蹂댁셿??蹂댁꽭??"
             )
         else:
             score = round(rating / 5.0, 2)
             feedback = (
-                "이유 설명이 아직 부족합니다. 참고 문서의 근거 문장을 인용하며 "
-                "왜 이 구간이 환각인지 설명해 보세요."
+                "?댁쑀 ?ㅻ챸???꾩쭅 遺議깊빀?덈떎. 李멸퀬 臾몄꽌??洹쇨굅 臾몄옣???몄슜?섎ŉ "
+                "????援ш컙???섍컖?몄? ?ㅻ챸??蹂댁꽭??"
             )
 
         return ReasoningEvaluation(reasoning_score=score, ai_feedback=feedback)
@@ -254,7 +248,7 @@ class GEvalService:
             return CorrectionEvaluation(
                 factual_accuracy=5,
                 completeness=5,
-                ai_feedback="문서 근거에 맞게 수정되었습니다.",
+                ai_feedback="臾몄꽌 洹쇨굅??留욊쾶 ?섏젙?섏뿀?듬땲??",
             )
 
         llm_config = resolve_geval_llm_config()
@@ -299,12 +293,12 @@ class GEvalService:
             f"hallucination_reason: {hallucination_reason}\n"
             f"evidence_sentence: {evidence_sentence}\n"
             f"reference_document:\n{doc_preview}\n\n"
-            'JSON만 출력: {"factual_accuracy": 1-5, "completeness": 1-5, '
-            '"feedback": "한국어 1~2문장"}'
+            'JSON留?異쒕젰: {"factual_accuracy": 1-5, "completeness": 1-5, '
+            '"feedback": "?쒓뎅??1~2臾몄옣"}'
         )
         parsed = await _request_geval_json(
             llm_config=llm_config,
-            system_prompt="교육용 채점 judge. 요청한 JSON만 출력.",
+            system_prompt="援먯쑁??梨꾩젏 judge. ?붿껌??JSON留?異쒕젰.",
             user_prompt=prompt,
         )
         factual = max(1, min(5, int(parsed.get("factual_accuracy", 1))))
@@ -339,7 +333,7 @@ class GEvalService:
             return CorrectionEvaluation(
                 factual_accuracy=5,
                 completeness=5,
-                ai_feedback="문서 근거에 맞게 수정되었습니다.",
+                ai_feedback="臾몄꽌 洹쇨굅??留욊쾶 ?섏젙?섏뿀?듬땲??",
             )
 
         answer_tokens = _tokenize(student_answer)
@@ -347,7 +341,7 @@ class GEvalService:
             return CorrectionEvaluation(
                 factual_accuracy=1,
                 completeness=1,
-                ai_feedback="수정 문장이 너무 짧습니다. 문서에 맞게 더 구체적으로 고쳐 보세요.",
+                ai_feedback="?섏젙 臾몄옣???덈Т 吏㏃뒿?덈떎. 臾몄꽌??留욊쾶 ??援ъ껜?곸쑝濡?怨좎퀜 蹂댁꽭??",
             )
 
         correct_hits = _count_hits(answer_tokens, _tokenize(correct_sentence))
@@ -361,13 +355,13 @@ class GEvalService:
         if correct_hits >= 2 and doc_hits >= 2:
             factual = 5
             completeness = 5
-            feedback = "문서 근거에 맞게 수정되었습니다."
+            feedback = "臾몄꽌 洹쇨굅??留욊쾶 ?섏젙?섏뿀?듬땲??"
         elif factual >= 4 and completeness >= 4:
-            feedback = "문서에 있는 내용으로 올바르게 고쳤습니다."
+            feedback = "臾몄꽌???덈뒗 ?댁슜?쇰줈 ?щ컮瑜닿쾶 怨좎낀?듬땲??"
         else:
             feedback = (
-                "수정 문장이 아직 부족합니다. 참고 문서의 표현을 반영해 "
-                "오류 구간을 더 정확히 고쳐 보세요."
+                "?섏젙 臾몄옣???꾩쭅 遺議깊빀?덈떎. 李멸퀬 臾몄꽌???쒗쁽??諛섏쁺??"
+                "?ㅻ쪟 援ш컙?????뺥솗??怨좎퀜 蹂댁꽭??"
             )
 
         return CorrectionEvaluation(
@@ -378,7 +372,7 @@ class GEvalService:
 
 
 def resolve_geval_llm_config() -> GEvalLlmConfig | None:
-    """G-Eval judge용 OpenAI Chat Completions 설정을 반환한다."""
+    """G-Eval judge??OpenAI Chat Completions ?ㅼ젙??諛섑솚?쒕떎."""
     if not settings.OPENAI_API_KEY.strip():
         return None
     return GEvalLlmConfig(
@@ -491,10 +485,10 @@ def _answers_equivalent(left: str, right: str) -> bool:
 
 def _correction_feedback(factual: int, completeness: int) -> str:
     if factual >= 4 and completeness >= 4:
-        return "문서 근거에 맞게 수정되었습니다."
+        return "臾몄꽌 洹쇨굅??留욊쾶 ?섏젙?섏뿀?듬땲??"
     if factual < 4:
-        return "사실 관계가 문서·정답과 맞지 않습니다. 참고 문서를 다시 확인해 보세요."
-    return "오류 구간이 충분히 교정되지 않았습니다. 의미가 완전히 바뀌도록 수정해 보세요."
+        return "?ъ떎 愿怨꾧? 臾몄꽌쨌?뺣떟怨?留욎? ?딆뒿?덈떎. 李멸퀬 臾몄꽌瑜??ㅼ떆 ?뺤씤??蹂댁꽭??"
+    return "?ㅻ쪟 援ш컙??異⑸텇??援먯젙?섏? ?딆븯?듬땲?? ?섎?媛 ?꾩쟾??諛붾뚮룄濡??섏젙??蹂댁꽭??"
 
 
 def _parse_json_content(content: str) -> dict:
@@ -509,7 +503,7 @@ def _parse_json_content(content: str) -> dict:
 
 
 def _tokenize(text: str) -> set[str]:
-    return set(re.findall(r"[가-힣A-Za-z0-9]{2,}", (text or "").lower()))
+    return set(re.findall(r"[媛-?쥱-Za-z0-9]{2,}", (text or "").lower()))
 
 
 def _count_hits(left: set[str], right: set[str]) -> int:
@@ -519,9 +513,9 @@ def _count_hits(left: set[str], right: set[str]) -> int:
 def _default_feedback(rating: int) -> str:
     if rating >= 5:
         return (
-            "완벽합니다! 원본 문서에 없는 내용이 개입된 환각을 정확히 찾아내셨고, "
-            "환각 유형과 이유 설명도 타당합니다."
+            "?꾨꼍?⑸땲?? ?먮낯 臾몄꽌???녿뒗 ?댁슜??媛쒖엯???섍컖???뺥솗??李얠븘?댁뀲怨? "
+            "?섍컖 ?좏삎怨??댁쑀 ?ㅻ챸????뱁빀?덈떎."
         )
     if rating >= 4:
-        return "문서 근거를 조금 더 구체적으로 쓰면 더 좋습니다."
-    return "참고 문서의 근거를 들어 왜 틀렸는지 다시 설명해 보세요."
+        return "臾몄꽌 洹쇨굅瑜?議곌툑 ??援ъ껜?곸쑝濡??곕㈃ ??醫뗭뒿?덈떎."
+    return "李멸퀬 臾몄꽌??洹쇨굅瑜??ㅼ뼱 ????몃뒗吏 ?ㅼ떆 ?ㅻ챸??蹂댁꽭??"

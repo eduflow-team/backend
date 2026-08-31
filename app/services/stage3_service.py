@@ -44,6 +44,7 @@ from app.schemas.stage3 import (
     Stage3AssignmentDetailResponse,
     Stage3AttemptsDetail,
     Stage3Claim,
+    Stage3CorrectionGradeRow,
     Stage3CreateRequest,
     Stage3CreateResponse,
     Stage3DebatePublicPayload,
@@ -62,12 +63,18 @@ from app.schemas.stage3 import (
     Stage3TurnPublic,
 )
 from app.services.stage3_debate import (
+    balance_fact_claims,
     build_turns,
     grade_usage,
     public_turns,
     resolve_checked_turn_ids,
 )
-from app.services.stage3_sources import search_sources
+from app.services.stage3_geval_service import grade_stage3_corrections
+from app.services.stage3_sources import (
+    attach_turn_sources,
+    fetch_turn_sources,
+    find_turn_sources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +240,8 @@ class Stage3Service:
                     if meta:
                         grade_result = Stage3SubmitResponse(
                             current_score=int(best.score or 0),
+                            usage_score=int(meta.get("usage_score", best.score or 0)),
+                            reasoning_score=int(meta.get("reasoning_score", best.score or 0)),
                             highest_score=status.best_score or int(best.score or 0),
                             is_highest_score=True,
                             caught=int(meta.get("caught", 0)),
@@ -244,6 +253,10 @@ class Stage3Service:
                             rows=[
                                 Stage3GradeRow(**row)
                                 for row in (meta.get("rows") or [])
+                            ],
+                            correction_rows=[
+                                Stage3CorrectionGradeRow(**row)
+                                for row in (meta.get("correction_rows") or [])
                             ],
                             attempts=Stage3AttemptsDetail(
                                 max_attempts=max_attempts,
@@ -421,38 +434,44 @@ class Stage3Service:
         )
         claim = payload.claim or ""
         text = payload.text or ""
-        if payload.turn_id:
-            attempts = await self.attempt_repository.list_by_user_and_assignment(
-                student.user_id, assignment_id
-            )
-            in_progress = self._latest_in_progress(attempts)
-            turns = (in_progress.debate_payload or {}).get("turns") or [] if in_progress else []
+        debate_payload: dict | None = None
+        attempts = await self.attempt_repository.list_by_user_and_assignment(
+            student.user_id, assignment_id
+        )
+        in_progress = self._latest_in_progress(attempts)
+        if in_progress and in_progress.debate_payload:
+            debate_payload = in_progress.debate_payload
+        elif detail.preview_debate_payload:
+            debate_payload = detail.preview_debate_payload
+
+        if payload.turn_id and debate_payload:
+            turns = debate_payload.get("turns") or []
             turn = next((item for item in turns if item.get("id") == payload.turn_id), None)
             if turn:
                 claim = claim or str(turn.get("claim") or "")
                 text = text or str(turn.get("text") or "")
+
+        stored = find_turn_sources(
+            debate_payload,
+            turn_id=payload.turn_id,
+            claim=claim,
+        )
+        if stored:
+            return Stage3SourcesResponse(
+                query=claim or detail.topic,
+                articles=[Stage3SourceItem(**item) for item in stored],
+                searches=[],
+            )
+
         try:
-            raw = await search_sources(detail.topic, claim, text)
+            articles = await fetch_turn_sources(detail.topic, claim, text, limit=4)
         except Exception:
             logger.exception("stage3 source lookup failed")
-            q = (detail.topic or claim or "교육 AI")[:80]
-            raw = {
-                "query": detail.topic,
-                "articles": [],
-                "searches": [
-                    {
-                        "title": f"'{q}' Google 뉴스",
-                        "url": f"https://news.google.com/search?q={q}&hl=ko&gl=KR&ceid=KR:ko",
-                        "source": "Google 뉴스",
-                        "published": "",
-                        "kind": "검색",
-                    }
-                ],
-            }
+            articles = []
         return Stage3SourcesResponse(
-            query=str(raw.get("query") or detail.topic),
-            articles=[Stage3SourceItem(**item) for item in raw.get("articles") or []],
-            searches=[Stage3SourceItem(**item) for item in raw.get("searches") or []],
+            query=claim or detail.topic,
+            articles=[Stage3SourceItem(**item) for item in articles],
+            searches=[],
         )
 
     # ------------------------------------------------------------------
@@ -495,7 +514,22 @@ class Stage3Service:
         )
 
         report = grade_usage(turns, checked)
-        current_score = int(report["score"])
+        usage_score = int(report["score"])
+        correction_payload = [
+            item.model_dump()
+            for item in (payload.corrections or [])
+        ]
+        reasoning_report = await grade_stage3_corrections(
+            turns,
+            checked,
+            correction_payload,
+            debate_payload=in_progress.debate_payload,
+        )
+        reasoning_score = int(reasoning_report["reasoning_score"])
+        current_score = round(
+            settings.STAGE3_USAGE_SCORE_WEIGHT * usage_score
+            + settings.STAGE3_REASONING_SCORE_WEIGHT * reasoning_score
+        )
 
         await self.submission_repository.clear_final_for_user_and_assignment(
             student.user_id, assignment_id
@@ -508,6 +542,7 @@ class Stage3Service:
                 {
                     "checked_turn_ids": sorted(checked),
                     "outcomes": [row["outcome"] for row in report["rows"]],
+                    "corrections": correction_payload,
                 },
                 ensure_ascii=False,
             ),
@@ -538,7 +573,11 @@ class Stage3Service:
                 "wasted": report["wasted"],
                 "headline": report["headline"],
                 "advice": report["advice"],
+                "usage_score": usage_score,
+                "reasoning_score": reasoning_score,
                 "rows": report["rows"],
+                "correction_rows": reasoning_report["correction_rows"],
+                "corrections": correction_payload,
             },
         )
         await self.evaluation_repository.create(evaluation)
@@ -563,6 +602,8 @@ class Stage3Service:
 
         return Stage3SubmitResponse(
             current_score=current_score,
+            usage_score=usage_score,
+            reasoning_score=reasoning_score,
             highest_score=new_best,
             is_highest_score=is_highest,
             caught=report["caught"],
@@ -572,6 +613,10 @@ class Stage3Service:
             headline=report["headline"],
             advice=report["advice"],
             rows=[Stage3GradeRow(**row) for row in report["rows"]],
+            correction_rows=[
+                Stage3CorrectionGradeRow(**row)
+                for row in reasoning_report["correction_rows"]
+            ],
             attempts=Stage3AttemptsDetail(
                 max_attempts=max_attempts,
                 used_attempts=used,
@@ -661,15 +706,18 @@ class Stage3Service:
                 {"role": "con", "text": langflow_result.con_argument},
                 {"role": "rebut", "text": langflow_result.rebuttal_argument},
             ]
-        return build_turns(
+        fact_check = balance_fact_claims(langflow_result.fact_check, speeches or None)
+        payload = build_turns(
             rounds,
-            langflow_result.fact_check,
+            fact_check,
             topic=detail.topic,
             pro_role=detail.pro_persona,
             con_role=detail.con_persona,
             source=langflow_result.source,
             mode=detail.debate_mode or "v2",
         )
+        await attach_turn_sources(payload, detail.topic)
+        return payload
 
     @staticmethod
     def _latest_in_progress(

@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
+from app.core.config import settings
 from app.core.exceptions import Stage3TurnNotFoundError
 
 VERDICT_RANK = {
@@ -20,7 +22,14 @@ VERDICT_RANK = {
 
 NEEDS_CHECK = frozenset({"exaggerated", "unsupported", "false"})
 PENALIZE_UNNECESSARY_CHECK = True
-MIN_DEBATE_FLAWS = 2
+MIN_DEBATE_FLAWS = settings.STAGE3_MIN_FLAWS
+MAX_DEBATE_FLAWS = settings.STAGE3_MAX_FLAWS
+MIN_SUPPORTED_CLAIMS = settings.STAGE3_MIN_SUPPORTED_CLAIMS
+_CLAIM_BUCKETS = ("pro_claims_checked", "con_claims_checked", "rebuttal_claims_checked")
+_SUPPORTED_REASON = "토론 발언의 핵심 근거로, 팩트체크 기준에서 큰 오류로 보기 어렵습니다."
+_DOWNGRADE_REASON = "맥락상 다소 강하게 표현되었으나, 학습용으로는 타당한 근거로 볼 수 있습니다."
+
+logger = logging.getLogger(__name__)
 
 ROUND_META = [
     ("pro_open", "pro-1", "입론 · 찬성 측"),
@@ -159,6 +168,101 @@ def count_flaw_claims(fact: dict | None) -> int:
     return sum(
         1 for _, claim in collect_fact_claims(fact) if str(claim.get("verdict")) in NEEDS_CHECK
     )
+
+
+def count_supported_claims(fact: dict | None) -> int:
+    return sum(
+        1 for _, claim in collect_fact_claims(fact) if str(claim.get("verdict")) == "supported"
+    )
+
+
+def _claim_exists(claim: str, existing: list[dict], *, threshold: float = 0.55) -> bool:
+    return any(overlap_ratio(claim, item.get("claim") or "") >= threshold for item in existing)
+
+
+def _dedupe_claim_buckets(fact: dict) -> list[dict]:
+    seen: set[str] = set()
+    collected: list[dict] = []
+    for key in _CLAIM_BUCKETS:
+        deduped: list[dict] = []
+        for item in fact.get(key) or []:
+            norm = _norm_claim(item)
+            if not norm:
+                continue
+            marker = re.sub(r"\s+", " ", norm["claim"].strip().lower())
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(norm)
+            collected.append(norm)
+        fact[key] = deduped
+    return collected
+
+
+def _append_supported_from_speeches(fact: dict, speeches: dict[str, str]) -> None:
+    for role, text in speeches.items():
+        if not text or "(이번 차례 아님)" in text:
+            continue
+        side = "pro" if str(role).startswith("pro") else "con"
+        bucket_key = "pro_claims_checked" if side == "pro" else "con_claims_checked"
+        bucket = fact.setdefault(bucket_key, [])
+        _, grounds = parse_speech(text)
+        for ground in grounds:
+            if _claim_exists(ground, bucket):
+                continue
+            bucket.append(
+                {
+                    "claim": ground,
+                    "verdict": "supported",
+                    "reason": _SUPPORTED_REASON,
+                }
+            )
+
+
+def _trim_excess_flaws(all_claims: list[dict]) -> None:
+    flaws = [item for item in all_claims if str(item.get("verdict")) in NEEDS_CHECK]
+    if len(flaws) <= MAX_DEBATE_FLAWS:
+        return
+    flaws.sort(key=lambda item: VERDICT_RANK.get(str(item.get("verdict")), 0), reverse=True)
+    keep = {_norm_claim_key(item["claim"]) for item in flaws[:MAX_DEBATE_FLAWS]}
+    for item in all_claims:
+        if str(item.get("verdict")) not in NEEDS_CHECK:
+            continue
+        if _norm_claim_key(str(item.get("claim") or "")) in keep:
+            continue
+        item["verdict"] = "supported"
+        item["reason"] = _DOWNGRADE_REASON
+
+
+def _norm_claim_key(claim: str) -> str:
+    return re.sub(r"\s+", " ", claim.strip().lower())
+
+
+def balance_fact_claims(fact: dict | None, speeches: dict[str, str] | None = None) -> dict | None:
+    """팩트체크 결과에 정상(supported) 근거 비율을 맞춘다."""
+
+    if not fact:
+        return fact
+
+    all_claims = _dedupe_claim_buckets(fact)
+    if speeches:
+        _append_supported_from_speeches(fact, speeches)
+        all_claims = [item for key in _CLAIM_BUCKETS for item in fact.get(key) or []]
+
+    _trim_excess_flaws(all_claims)
+
+    if count_supported_claims(fact) < MIN_SUPPORTED_CLAIMS and speeches:
+        _append_supported_from_speeches(fact, speeches)
+
+    flaw_count = count_flaw_claims(fact)
+    if flaw_count < MIN_DEBATE_FLAWS:
+        logger.warning(
+            "stage3 fact-check has only %d flaw claims (min %d)",
+            flaw_count,
+            MIN_DEBATE_FLAWS,
+        )
+
+    return fact
 
 
 def merge_facts(*facts: dict | None) -> dict:
@@ -355,7 +459,7 @@ def grade_usage(turns: list[dict], checked_ids: set[str]) -> dict:
     score = round((correct / len(rows)) * 100) if rows else 0
 
     if score >= 90:
-        headline = "팩트체커를 정확한 순간에 썼어요"
+        headline = "완벽하게 검증했어요!"
         advice = "의심할 발언과 넘어가도 될 발언을 거의 정확히 갈랐습니다."
     elif score >= 70:
         headline = "대체로 잘 판단했어요"

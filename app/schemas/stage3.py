@@ -205,8 +205,32 @@ class Stage3DecisionItem(BaseModel):
         return value.strip()
 
 
+class Stage3CorrectionItem(BaseModel):
+    turn_id: str = Field(..., min_length=1)
+    highlight: str | None = None
+    why_wrong: str | None = None
+    correct_ground: str | None = None
+
+    @field_validator("turn_id")
+    @classmethod
+    def strip_turn_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("turn_id는 비어 있을 수 없습니다.")
+        return stripped
+
+    @field_validator("highlight", "why_wrong", "correct_ground")
+    @classmethod
+    def strip_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
 class Stage3SubmitRequest(BaseModel):
     decisions: list[Stage3DecisionItem] | None = None
+    corrections: list[Stage3CorrectionItem] | None = None
 
 
 class Stage3GradeRow(BaseModel):
@@ -222,8 +246,18 @@ class Stage3GradeRow(BaseModel):
     outcome: str
 
 
+class Stage3CorrectionGradeRow(BaseModel):
+    turn_id: str
+    why_rating: int
+    ground_rating: int
+    turn_score: int
+    feedback: str
+
+
 class Stage3SubmitResponse(BaseModel):
     current_score: int
+    usage_score: int
+    reasoning_score: int
     highest_score: int
     is_highest_score: bool
     caught: int
@@ -233,4 +267,5 @@ class Stage3SubmitResponse(BaseModel):
     headline: str
     advice: str
     rows: list[Stage3GradeRow]
+    correction_rows: list[Stage3CorrectionGradeRow] = Field(default_factory=list)
     attempts: Stage3AttemptsDetail

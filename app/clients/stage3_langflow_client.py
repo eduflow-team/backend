@@ -28,13 +28,13 @@ _FLAW_TYPES = (
     "근거 없는 일반화, 잘못된 기관·법령 인용"
 )
 
-_FLAW_INSERTION_RULE = f"""토론 **전체**(입론~최종 변론, 찬성·반대 합산)에 학생이 팩트체크할 **의도적 오류를 최소 2개** 넣으세요.
+_FLAW_INSERTION_RULE = f"""토론 **전체** 근거 중 **약 25~35%(2~3개)**만 의도적 오류로 넣고, **나머지는 사실에 가깝고 검증 가능한 정상 근거**로 작성하세요.
 - 허용 오류 유형: {_FLAW_TYPES}
-- 오류는 핵심 근거 목록에 자연스럽게 섞고, 발언마다 0~1개씩 분산하세요.
-- 오류가 너무 뻔하거나 개수가 부족하면 학습 활동이 성립하지 않습니다."""
+- 오류는 핵심 근거 목록에 자연스럽게 섞고, 발언마다 최대 1개씩 분산하세요.
+- 오류만 잔뜩 넣지 말고, supported로 볼 수 있는 근거가 **최소 4개 이상** 있어야 합니다."""
 
 _DEBATE_QUALITY_NOTE = f"""[토론 품질]
-찬성·반대·반론·결론을 합친 **전체 토론**에 의도적 오류(과장, 허위, 출처·기관 미언급 등)가 **최소 2개** 포함되어야 합니다.
+찬성·반대·반론·결론을 합친 **전체 토론**에 의도적 오류(과장, 허위, 출처·기관 미언급 등) **2~3개**와, 검증 가능한 **정상 근거 4개 이상**이 함께 포함되어야 합니다.
 """
 
 _PRO_PROMPT = """당신은 EduFlow 3단계 토론의 **찬성 에이전트**입니다.
@@ -85,9 +85,10 @@ _FACT_PROMPT = """당신은 EduFlow 3단계 토론의 **팩트체커 에이전�
 1. 입력의 찬성·반대 주장에서 과장, 근거 부족, 사실 오류(환각), **출처·기관명 없는 단정**을 찾으세요.
 2. `unsupported`는 근거·기관·연구명이 없는 단정, `exaggerated`는 과장된 수치, `false`는 사실과 다른 내용에 쓰세요.
 3. 중립적으로 검증하세요. 결론을 대신 내리지 마세요.
-4. 전체 토론에서 문제 있는 주장을 **최소 2개** pro_claims_checked 또는 con_claims_checked에 포함하세요.
-5. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
-6. 반드시 아래 JSON만 출력하세요(다른 텍스트 금지):
+4. 찬성·반대 주장의 **주요 근거를 빠짐없이** pro/con_claims_checked에 넣으세요.
+5. exaggerated·unsupported·false는 **2~3개**만, supported는 **최소 4개 이상** 포함하세요.
+6. 중·고등학생이 이해할 수 있는 한국어로 답하세요.
+7. 반드시 아래 JSON만 출력하세요(다른 텍스트 금지):
 {{
   "topic": "토론 주제",
   "pro_argument": "입력에서 받은 찬성 주장 요약",
@@ -111,7 +112,7 @@ _FINAL_FACT_PROMPT = """당신은 EduFlow 3단계 토론의 **팩트체커 에�
 규칙:
 1. 위 전체 토론에서 과장, 근거 부족, 사실 오류, **출처·기관명 없는 단정**을 찾으세요.
 2. 문제 있는 주장을 pro_claims_checked 또는 con_claims_checked에 넣고, verdict는 supported|exaggerated|unsupported|false 중 하나로 표시하세요.
-3. exaggerated·unsupported·false 판정 주장을 **최소 2개** 반드시 포함하세요.
+3. exaggerated·unsupported·false는 **2~3개**, supported는 **최소 4개 이상** 반드시 포함하세요.
 4. 반드시 JSON만 출력하세요:
 {{
   "topic": "{topic}",
@@ -298,6 +299,7 @@ class Stage3LangflowClient:
     ) -> Stage3LangflowResult:
         from app.services.stage3_debate import (
             MIN_DEBATE_FLAWS,
+            balance_fact_claims,
             count_flaw_claims,
             merge_facts,
             parse_fact_json,
@@ -440,6 +442,7 @@ class Stage3LangflowClient:
             )
             if supplemental:
                 merged = merge_facts(merged, supplemental)
+        merged = balance_fact_claims(merged, speeches) or merged
 
         return Stage3LangflowResult(
             pro_argument=pro_open,
@@ -595,18 +598,22 @@ class Stage3LangflowClient:
         if not pro_argument.strip() and not con_argument.strip():
             raise Stage3LangflowServiceUnavailableError()
 
+        from app.services.stage3_debate import balance_fact_claims
+
         parsed_fact = _parse_json_object(fact_raw) if fact_raw else {}
+        speeches = {
+            "pro_open": pro_argument.strip(),
+            "con_open": con_argument.strip(),
+            "pro_rebut": rebuttal_argument.strip(),
+        }
+        parsed_fact = balance_fact_claims(parsed_fact, speeches) or parsed_fact
         return Stage3LangflowResult(
             pro_argument=pro_argument.strip(),
             con_argument=con_argument.strip(),
             rebuttal_argument=rebuttal_argument.strip(),
             fact_check=parsed_fact,
             fact_check_raw=(fact_raw or "").strip(),
-            speeches={
-                "pro_open": pro_argument.strip(),
-                "con_open": con_argument.strip(),
-                "pro_rebut": rebuttal_argument.strip(),
-            },
+            speeches=speeches,
             source="langflow",
         )
 
@@ -771,6 +778,10 @@ class Stage3LangflowClient:
                     "pro_rerebut": pro_close,
                 }
             )
+
+        from app.services.stage3_debate import balance_fact_claims
+
+        fact = balance_fact_claims(fact, speeches) or fact
 
         return Stage3LangflowResult(
             pro_argument=pro,

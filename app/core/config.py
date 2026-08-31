@@ -101,6 +101,12 @@ class Settings(BaseSettings):
 
     # Stage 3
     STAGE3_MAX_ATTEMPTS: int = 3
+    STAGE3_MIN_FLAWS: int = 2
+    STAGE3_MAX_FLAWS: int = 3
+    STAGE3_MIN_SUPPORTED_CLAIMS: int = 4
+    STAGE3_USAGE_SCORE_WEIGHT: float = 0.5
+    STAGE3_REASONING_SCORE_WEIGHT: float = 0.5
+    STAGE3_CORRECTION_MIN_RATING: int = 4
     # Langflow 미연결 로컬 개발 시에만 true (기본: 503)
     STAGE3_ALLOW_MOCK: bool = False
 
