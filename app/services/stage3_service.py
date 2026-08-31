@@ -72,8 +72,12 @@ from app.services.stage3_debate import (
 from app.services.stage3_geval_service import grade_stage3_corrections
 from app.services.stage3_sources import (
     attach_turn_sources,
+    debate_has_stored_sources,
+    fetch_topic_articles,
     fetch_turn_sources,
+    filter_real_articles,
     find_turn_sources,
+    format_news_brief,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,6 +168,11 @@ class Stage3Service:
 
         if detail.preview_debate_payload:
             payload = detail.preview_debate_payload
+            if not debate_has_stored_sources(payload):
+                await attach_turn_sources(payload, detail.topic, force=True)
+                detail.preview_debate_payload = payload
+                await self.stage3_detail_repository.update(detail)
+                await self.session.commit()
             return Stage3TeacherPreviewResponse(
                 assignment_id=assignment_id,
                 reused=True,
@@ -336,6 +345,10 @@ class Stage3Service:
         question = (payload.question if payload else None) or detail.question
         if detail.preview_debate_payload:
             debate_payload = detail.preview_debate_payload
+            if not debate_has_stored_sources(debate_payload):
+                await attach_turn_sources(debate_payload, detail.topic, force=True)
+                detail.preview_debate_payload = debate_payload
+                await self.stage3_detail_repository.update(detail)
         else:
             debate_payload = await self._generate_debate_payload(detail, question=question)
         if not debate_payload.get("turns"):
@@ -433,14 +446,15 @@ class Stage3Service:
             student, assignment_id
         )
         claim = payload.claim or ""
-        text = payload.text or ""
         debate_payload: dict | None = None
+        persist_attempt = None
         attempts = await self.attempt_repository.list_by_user_and_assignment(
             student.user_id, assignment_id
         )
         in_progress = self._latest_in_progress(attempts)
         if in_progress and in_progress.debate_payload:
             debate_payload = in_progress.debate_payload
+            persist_attempt = in_progress
         elif detail.preview_debate_payload:
             debate_payload = detail.preview_debate_payload
 
@@ -449,28 +463,39 @@ class Stage3Service:
             turn = next((item for item in turns if item.get("id") == payload.turn_id), None)
             if turn:
                 claim = claim or str(turn.get("claim") or "")
-                text = text or str(turn.get("text") or "")
+
+        if debate_payload and not find_turn_sources(
+            debate_payload,
+            turn_id=payload.turn_id,
+            claim=claim,
+        ):
+            await attach_turn_sources(debate_payload, detail.topic, force=True)
+            if persist_attempt is not None:
+                persist_attempt.debate_payload = debate_payload
+                await self.attempt_repository.update(persist_attempt)
+                await self.session.commit()
+            elif detail.preview_debate_payload is debate_payload:
+                detail.preview_debate_payload = debate_payload
+                await self.stage3_detail_repository.update(detail)
+                await self.session.commit()
 
         stored = find_turn_sources(
             debate_payload,
             turn_id=payload.turn_id,
             claim=claim,
         )
-        if stored:
-            return Stage3SourcesResponse(
-                query=claim or detail.topic,
-                articles=[Stage3SourceItem(**item) for item in stored],
-                searches=[],
-            )
+        if not stored and claim:
+            try:
+                stored = filter_real_articles(
+                    await fetch_turn_sources(detail.topic, claim, limit=4)
+                )
+            except Exception:
+                logger.exception("stage3 source lookup failed")
+                stored = []
 
-        try:
-            articles = await fetch_turn_sources(detail.topic, claim, text, limit=4)
-        except Exception:
-            logger.exception("stage3 source lookup failed")
-            articles = []
         return Stage3SourcesResponse(
             query=claim or detail.topic,
-            articles=[Stage3SourceItem(**item) for item in articles],
+            articles=[Stage3SourceItem(**item) for item in stored],
             searches=[],
         )
 
@@ -689,6 +714,8 @@ class Stage3Service:
         *,
         question: str | None = None,
     ) -> dict:
+        topic_articles = await fetch_topic_articles(detail.topic)
+        news_brief = format_news_brief(topic_articles)
         langflow_result = await self.langflow_client.run_debate(
             topic=detail.topic,
             pro_persona=detail.pro_persona,
@@ -696,6 +723,8 @@ class Stage3Service:
             fact_persona=detail.fact_persona or _DEFAULT_FACT_PERSONA,
             question=question,
             mode=detail.debate_mode or "v2",
+            news_brief=news_brief,
+            topic_articles=topic_articles,
         )
         speeches = langflow_result.speeches or {}
         if speeches:
@@ -716,6 +745,7 @@ class Stage3Service:
             source=langflow_result.source,
             mode=detail.debate_mode or "v2",
         )
+        payload["topic_articles"] = filter_real_articles(topic_articles)
         await attach_turn_sources(payload, detail.topic)
         return payload
 

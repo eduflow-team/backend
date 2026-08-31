@@ -37,6 +37,20 @@ _DEBATE_QUALITY_NOTE = f"""[토론 품질]
 찬성·반대·반론·결론을 합친 **전체 토론**에 의도적 오류(과장, 허위, 출처·기관 미언급 등) **2~3개**와, 검증 가능한 **정상 근거 4개 이상**이 함께 포함되어야 합니다.
 """
 
+
+def _news_context_block(news_brief: str) -> str:
+    brief = (news_brief or "").strip()
+    if not brief:
+        return ""
+    return f"""
+[참고 기사 — 토론 근거는 아래 기사 내용만 사용]
+{brief}
+
+- 각 근거 문장 끝에 [기사N] 형식으로 출처 번호를 붙이세요.
+- 기사에 없는 통계·연구·기관명은 만들지 마세요.
+- 의도적 오류는 기사 내용을 과장·왜곡하는 방식으로만 넣으세요.
+"""
+
 _PRO_PROMPT = """당신은 EduFlow 3단계 토론의 **찬성 에이전트**입니다.
 역할/성격: {persona}
 
@@ -149,10 +163,13 @@ class Stage3LangflowClient:
         fact_persona: str = _DEFAULT_FACT_PERSONA,
         question: str | None = None,
         mode: str = "v2",
+        news_brief: str | None = None,
+        topic_articles: list[dict] | None = None,
     ) -> Stage3LangflowResult:
         debate_mode = (mode or "v2").strip().lower()
         if debate_mode not in {"v1", "v2"}:
             debate_mode = "v2"
+        brief = (news_brief or "").strip()
 
         if debate_mode == "v2":
             v1_id = await self._resolve_flow_id("v1")
@@ -164,6 +181,7 @@ class Stage3LangflowClient:
                     fact_persona=fact_persona,
                     question=question,
                     flow_id=v1_id,
+                    news_brief=brief,
                 )
 
         flow_id = await self._resolve_flow_id(debate_mode)
@@ -176,6 +194,8 @@ class Stage3LangflowClient:
                 question=question,
                 mode=debate_mode,
                 flow_id=flow_id,
+                news_brief=brief,
+                topic_articles=topic_articles,
             )
 
         if settings.STAGE3_ALLOW_MOCK:
@@ -186,6 +206,8 @@ class Stage3LangflowClient:
                 fact_persona=fact_persona,
                 question=question,
                 mode=debate_mode,
+                news_brief=brief,
+                topic_articles=topic_articles,
             )
 
         raise Stage3LangflowServiceUnavailableError()
@@ -227,9 +249,23 @@ class Stage3LangflowClient:
         return ""
 
     @staticmethod
-    def _agent_sys(side: str, persona: str, duty: str, *, heading: str) -> str:
+    def _agent_sys(
+        side: str,
+        persona: str,
+        duty: str,
+        *,
+        heading: str,
+        news_brief: str = "",
+    ) -> str:
         label = "찬성" if side == "pro" else "반대"
         other = "반대" if side == "pro" else "찬성"
+        news_block = _news_context_block(news_brief)
+        news_rules = ""
+        if news_block:
+            news_rules = """
+6. **아래 [참고 기사]의 내용만** 근거로 사용하세요. 없는 사실·수치·기관을 지어내지 마세요.
+7. 각 근거 끝에 [기사N] 형식으로 출처 번호를 붙이세요.
+8. 의도적 오류는 기사 내용을 과장·왜곡하는 방식으로만 넣으세요."""
         return f"""당신은 EduFlow 3단계 토론의 **{label} 에이전트**입니다.
 역할/성격: {persona}
 
@@ -240,7 +276,8 @@ class Stage3LangflowClient:
 2. 근거 2~3개를 제시하세요.
 3. {_FLAW_INSERTION_RULE}
 4. 상대 발언을 인용할 때는 한 문장만 짧게 인용하세요.
-5. 중·고등학생이 이해할 수 있는 한국어로, 아래 형식으로만 답하세요:
+5. 중·고등학생이 이해할 수 있는 한국어로, 아래 형식으로만 답하세요:{news_rules}
+{news_block}
 【{heading}】
 주장 요약: ...
 핵심 근거:
@@ -296,6 +333,7 @@ class Stage3LangflowClient:
         fact_persona: str,
         question: str | None,
         flow_id: str,
+        news_brief: str = "",
     ) -> Stage3LangflowResult:
         from app.services.stage3_debate import (
             MIN_DEBATE_FLAWS,
@@ -307,6 +345,7 @@ class Stage3LangflowClient:
 
         extra = f"\n학생 질문: {question.strip()}" if question and question.strip() else ""
         quality = _DEBATE_QUALITY_NOTE
+        news_prefix = _news_context_block(news_brief)
         pro_id = settings.LANGFLOW_STAGE3_PRO_AGENT_ID.strip() or "LM-s3pro"
         con_id = settings.LANGFLOW_STAGE3_CON_AGENT_ID.strip() or "LM-s3con"
 
@@ -320,7 +359,7 @@ class Stage3LangflowClient:
 
         out1 = await self._run_v1_outputs(
             flow_id,
-            f"{quality}논제: {topic}\n찬성 측 페르소나: {pro_persona}\n반대 측 페르소나: {con_persona}{extra}\n지금은 입론입니다.",
+            f"{quality}{news_prefix}\n논제: {topic}\n찬성 측 페르소나: {pro_persona}\n반대 측 페르소나: {con_persona}{extra}\n지금은 입론입니다.",
             {
                 pro_id: {
                     "system_message": self._agent_sys(
@@ -328,6 +367,7 @@ class Stage3LangflowClient:
                         pro_persona,
                         "찬성 측 입론을 하세요. 논제를 정의하고, 배경을 짧게 설명한 뒤, 주요 주장과 근거를 제시하세요.",
                         heading="찬성 측 입론",
+                        news_brief=news_brief,
                     )
                 },
                 con_id: {
@@ -336,6 +376,7 @@ class Stage3LangflowClient:
                         con_persona,
                         "반대 측 입론을 하세요. 반대 입장의 주요 주장과 근거를 제시하세요. 찬성 측을 인용하지 마세요.",
                         heading="반대 측 입론",
+                        news_brief=news_brief,
                     )
                 },
             },
@@ -358,6 +399,7 @@ class Stage3LangflowClient:
                         con_persona,
                         "반대 측 반론을 하세요. 찬성 측 입론의 허점이나 근거의 타당성을 지적하세요.",
                         heading="반대 측 반론",
+                        news_brief=news_brief,
                     )
                 },
             },
@@ -379,6 +421,7 @@ class Stage3LangflowClient:
                         pro_persona,
                         "찬성 측 반론을 하세요. 반대 측 반론을 재반박하고 찬성 측 입론을 강화하세요.",
                         heading="찬성 측 반론",
+                        news_brief=news_brief,
                     )
                 },
                 con_id: {"system_message": self._hold_sys("con", con_persona)},
@@ -401,6 +444,7 @@ class Stage3LangflowClient:
                         pro_persona,
                         "찬성 측 최종 변론을 하세요. 핵심 쟁점을 정리하고 찬성 입장을 강조하세요. 당신이 마지막 발언입니다.",
                         heading="찬성 측 최종 변론",
+                        news_brief=news_brief,
                     )
                 },
                 con_id: {
@@ -409,6 +453,7 @@ class Stage3LangflowClient:
                         con_persona,
                         "반대 측 최종 변론을 하세요. 핵심 쟁점을 정리하고 반대 입장을 강조하세요.",
                         heading="반대 측 최종 변론",
+                        news_brief=news_brief,
                     )
                 },
             },
@@ -510,6 +555,7 @@ class Stage3LangflowClient:
         question: str | None,
         mode: str,
         flow_id: str,
+        news_brief: str = "",
     ) -> Stage3LangflowResult:
         payload: dict = {
             "input_value": self._build_input_value(
@@ -518,6 +564,7 @@ class Stage3LangflowClient:
                 con_persona=con_persona,
                 fact_persona=fact_persona,
                 question=question,
+                news_brief=news_brief,
             ),
             "input_type": "chat",
             "output_type": "chat",
@@ -529,10 +576,11 @@ class Stage3LangflowClient:
             pro_id = settings.LANGFLOW_STAGE3_PRO_AGENT_ID.strip() or "LM-s3pro"
             con_id = settings.LANGFLOW_STAGE3_CON_AGENT_ID.strip() or "LM-s3con"
             fact_id = settings.LANGFLOW_STAGE3_FACT_AGENT_ID.strip() or "LM-s3fact"
+            news_extra = _news_context_block(news_brief)
             payload["tweaks"] = {
-                pro_id: {"system_message": _PRO_PROMPT.format(persona=pro_persona)},
-                con_id: {"system_message": _CON_PROMPT.format(persona=con_persona)},
-                fact_id: {"system_message": _FACT_PROMPT.format(persona=fact_persona)},
+                pro_id: {"system_message": _PRO_PROMPT.format(persona=pro_persona) + news_extra},
+                con_id: {"system_message": _CON_PROMPT.format(persona=con_persona) + news_extra},
+                fact_id: {"system_message": _FACT_PROMPT.format(persona=fact_persona) + news_extra},
             }
 
         url = f"{settings.LANGFLOW_URL.rstrip('/')}/api/v1/run/{flow_id}"
@@ -561,6 +609,7 @@ class Stage3LangflowClient:
         con_persona: str,
         fact_persona: str,
         question: str | None,
+        news_brief: str = "",
     ) -> str:
         lines = [
             f"논제: {topic.strip()}",
@@ -568,6 +617,9 @@ class Stage3LangflowClient:
             f"반대 측 페르소나: {con_persona.strip()}",
             f"팩트체커 페르소나: {fact_persona.strip()}",
         ]
+        news_block = _news_context_block(news_brief)
+        if news_block:
+            lines.append(news_block.strip())
         if question and question.strip():
             lines.append(f"학생 질문: {question.strip()}")
         return "\n".join(lines)
@@ -656,28 +708,53 @@ class Stage3LangflowClient:
         fact_persona: str,
         question: str | None,
         mode: str = "v2",
+        news_brief: str = "",
+        topic_articles: list[dict] | None = None,
     ) -> Stage3LangflowResult:
         q = (question or "").strip()
-        pro = (
-            f"【찬성 입장】\n"
-            f"주장 요약: '{topic}'에 찬성합니다. ({pro_persona})\n"
-            f"핵심 근거:\n"
-            f"1. AI 감독은 부정행위를 90% 이상 줄인다는 연구 결과가 있습니다.\n"
-            f"2. 교사 채점·감독 부담을 크게 줄여 수업 질이 올라갑니다.\n"
-            f"예상 효과: 공정한 시험 환경과 행정 효율을 동시에 확보할 수 있습니다."
-        )
+        articles = topic_articles or []
+        if len(articles) >= 2:
+            a1, a2 = articles[0], articles[1]
+            t1 = (a1.get("title") or "관련 보도").strip()
+            t2 = (a2.get("title") or "관련 보도").strip()
+            pro = (
+                f"【찬성 입장】\n"
+                f"주장 요약: '{topic}'에 찬성합니다. ({pro_persona})\n"
+                f"핵심 근거:\n"
+                f"1. '{t1}' 보도에 따르면 도입 효과가 보고되었습니다. [기사1]\n"
+                f"2. '{t2}' 기사에서도 관련 정책 논의가 진행 중입니다. [기사2]\n"
+                f"예상 효과: 공정한 시험 환경과 행정 효율을 동시에 확보할 수 있습니다."
+            )
+            con = (
+                f"【반대 입장】\n"
+                f"주장 요약: '{topic}'에 반대합니다. ({con_persona})\n"
+                f"찬성 측 비판: '{t1}' 보도만으로 전면 도입을 정당화하기 어렵습니다.\n"
+                f"핵심 근거:\n"
+                f"1. '{t2}' 기사에서도 개인정보·윤리 우려가 제기되었습니다. [기사2]\n"
+                f"2. 전국 80% 학교가 이미 AI 감독을 도입했다는 수치는 과장일 수 있습니다. [기사1]\n"
+                f"우려되는 점: 감시 문화가 교실 신뢰를 무너뜨릴 수 있습니다."
+            )
+        else:
+            pro = (
+                f"【찬성 입장】\n"
+                f"주장 요약: '{topic}'에 찬성합니다. ({pro_persona})\n"
+                f"핵심 근거:\n"
+                f"1. AI 감독은 부정행위를 90% 이상 줄인다는 연구 결과가 있습니다.\n"
+                f"2. 교사 채점·감독 부담을 크게 줄여 수업 질이 올라갑니다.\n"
+                f"예상 효과: 공정한 시험 환경과 행정 효율을 동시에 확보할 수 있습니다."
+            )
+            con = (
+                f"【반대 입장】\n"
+                f"주장 요약: '{topic}'에 반대합니다. ({con_persona})\n"
+                f"찬성 측 비판: '부정행위 90% 감소'는 근거가 불명확하고 과장일 수 있습니다.\n"
+                f"핵심 근거:\n"
+                f"1. 얼굴·시선 데이터 수집은 학생 개인정보를 과도하게 침해합니다.\n"
+                f"2. 전국 학교의 80%가 이미 AI 감독을 도입했다는 보고가 있습니다.\n"
+                f"우려되는 점: 감시 문화가 교실 신뢰를 무너뜨릴 수 있습니다."
+            )
         if q:
             pro += f"\n추가 응답(학생 질문): {q}"
-
-        con = (
-            f"【반대 입장】\n"
-            f"주장 요약: '{topic}'에 반대합니다. ({con_persona})\n"
-            f"찬성 측 비판: '부정행위 90% 감소'는 근거가 불명확하고 과장일 수 있습니다.\n"
-            f"핵심 근거:\n"
-            f"1. 얼굴·시선 데이터 수집은 학생 개인정보를 과도하게 침해합니다.\n"
-            f"2. 전국 학교의 80%가 이미 AI 감독을 도입했다는 보고가 있습니다.\n"
-            f"우려되는 점: 감시 문화가 교실 신뢰를 무너뜨릴 수 있습니다."
-        )
+        del news_brief
         rebuttal = (
             f"【반론 · 찬성 측】\n"
             f"주장 요약: 동의 절차를 넣으면 '{topic}'을 도입할 수 있습니다.\n"

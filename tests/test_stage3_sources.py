@@ -1,6 +1,18 @@
 import pytest
 
-from app.services.stage3_sources import _dedupe_articles, find_turn_sources, mock_turn_sources
+from app.services.stage3_sources import (
+    _dedupe_articles,
+    debate_has_stored_sources,
+    filter_real_articles,
+    find_turn_sources,
+    format_news_brief,
+    is_real_article,
+    link_claims_to_topic_articles,
+    mock_turn_sources,
+    parse_article_refs,
+    sources_for_claim_text,
+    turn_has_stored_sources,
+)
 
 
 def test_find_turn_sources_by_turn_id() -> None:
@@ -106,3 +118,79 @@ def test_dedupe_strips_mock_title_suffix() -> None:
         },
     ]
     assert len(_dedupe_articles(items)) == 1
+
+
+def test_debate_has_stored_sources() -> None:
+    assert not debate_has_stored_sources({"turns": [{"id": "a", "claim": "x"}]})
+    assert debate_has_stored_sources(
+        {
+            "turns": [
+                {
+                    "id": "a",
+                    "sources": [{"title": "기사", "url": "https://example.com", "source": "A", "published": "", "kind": "기사"}],
+                }
+            ]
+        }
+    )
+
+
+def test_turn_has_stored_sources_from_claim() -> None:
+    turn = {
+        "claims": [
+            {
+                "claim": "로봇세는 일자리를 보호한다.",
+                "sources": [{"title": "기사", "url": "https://example.com", "source": "A", "published": "", "kind": "기사"}],
+            }
+        ]
+    }
+    assert turn_has_stored_sources(turn)
+
+
+def test_filter_real_articles_rejects_placeholder() -> None:
+    mock = mock_turn_sources("AI 교육", "자율주행차 사고율 90% 감소")
+    assert not is_real_article(mock[0])
+    assert filter_real_articles(mock) == []
+    assert filter_real_articles(
+        [{"title": "AI세 도입", "url": "https://news.google.com/rss/articles/abc", "source": "조선", "published": "", "kind": "기사"}]
+    )
+
+
+def test_format_news_brief_and_article_refs() -> None:
+    articles = [
+        {"title": "AI 교육 도입", "url": "https://example.com/a", "source": "연합", "published": "", "kind": "기사"},
+        {"title": "개인정보 우려", "url": "https://example.com/b", "source": "조선", "published": "", "kind": "기사"},
+    ]
+    brief = format_news_brief(articles)
+    assert "기사1. AI 교육 도입" in brief
+    assert parse_article_refs("보도에 따르면 효과가 있다. [기사1]") == [1]
+
+
+def test_link_claims_to_topic_articles_by_ref() -> None:
+    pool = [
+        {"title": "AI 교육 도입 확대", "url": "https://example.com/a", "source": "연합", "published": "", "kind": "기사"},
+        {"title": "개인정보 보호 논란", "url": "https://example.com/b", "source": "조선", "published": "", "kind": "기사"},
+    ]
+    payload = {
+        "topic_articles": pool,
+        "turns": [
+            {
+                "id": "pro-1",
+                "claim": "AI 교육 도입 확대",
+                "grounds": ["AI 교육 도입 확대 보도가 있다. [기사1]"],
+                "claims": [],
+            }
+        ],
+    }
+    link_claims_to_topic_articles(payload, pool)
+    found = find_turn_sources(payload, turn_id="pro-1")
+    assert len(found) == 1
+    assert found[0]["title"] == "AI 교육 도입 확대"
+
+
+def test_sources_for_claim_text_overlap() -> None:
+    pool = [
+        {"title": "로봇세 도입 논의", "url": "https://example.com/tax", "source": "한경", "published": "", "kind": "기사"},
+    ]
+    linked = sources_for_claim_text("로봇세 도입이 일자리 보호에 도움이 된다.", pool)
+    assert len(linked) == 1
+    assert linked[0]["title"] == "로봇세 도입 논의"
