@@ -9,12 +9,14 @@ from app.models.stage import (
     Stage1AssignmentDetail,
     Stage2AssignmentDetail,
     Stage2ErrorAnswer,
+    Stage3AssignmentDetail,
 )
 from app.models.student_status import StudentAssignmentStatus
 from app.models.submission import (
     Stage1Attempt,
     Stage2CorrectionSubmission,
     Stage2HighlightSubmission,
+    Stage3DebateAttempt,
     Submission,
 )
 from app.models.user import RefreshToken, User
@@ -35,6 +37,8 @@ __all__ = [
     "Stage2CorrectionSubmission",
     "Stage2ErrorAnswer",
     "Stage2HighlightSubmission",
+    "Stage3AssignmentDetail",
+    "Stage3DebateAttempt",
     "StudentAssignmentStatus",
     "Submission",
     "User",

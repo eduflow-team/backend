@@ -4,11 +4,17 @@ from app.models.stage import (
     Stage1AssignmentDetail,
     Stage2AssignmentDetail,
     Stage2ErrorAnswer,
+    Stage3AssignmentDetail,
+)
+from app.schemas.stage2_generation import (
+    Stage2GenerationMetadata,
+    dump_stage2_generation_metadata,
 )
 from app.models.submission import (
     Stage1Attempt,
     Stage2CorrectionSubmission,
     Stage2HighlightSubmission,
+    Stage3DebateAttempt,
 )
 from app.repositories.base import BaseRepository
 
@@ -33,6 +39,14 @@ class Stage2DetailRepository(BaseRepository[Stage2AssignmentDetail]):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def set_generation_metadata(
+        self,
+        detail: Stage2AssignmentDetail,
+        metadata: Stage2GenerationMetadata,
+    ) -> Stage2AssignmentDetail:
+        detail.generation_metadata = dump_stage2_generation_metadata(metadata)
+        return await self.update(detail)
 
 
 class Stage2ErrorAnswerRepository(BaseRepository[Stage2ErrorAnswer]):
@@ -83,6 +97,37 @@ class Stage2HighlightRepository(BaseRepository[Stage2HighlightSubmission]):
                 Stage2HighlightSubmission.assignment_id == assignment_id,
             )
             .order_by(Stage2HighlightSubmission.highlight_id)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+
+class Stage3DetailRepository(BaseRepository[Stage3AssignmentDetail]):
+    model = Stage3AssignmentDetail
+
+    async def get_by_assignment_id(self, assignment_id: int) -> Stage3AssignmentDetail | None:
+        stmt = select(Stage3AssignmentDetail).where(
+            Stage3AssignmentDetail.assignment_id == assignment_id
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+
+class Stage3AttemptRepository(BaseRepository[Stage3DebateAttempt]):
+    model = Stage3DebateAttempt
+
+    async def list_by_user_and_assignment(
+        self,
+        user_id: int,
+        assignment_id: int,
+    ) -> list[Stage3DebateAttempt]:
+        stmt = (
+            select(Stage3DebateAttempt)
+            .where(
+                Stage3DebateAttempt.user_id == user_id,
+                Stage3DebateAttempt.assignment_id == assignment_id,
+            )
+            .order_by(Stage3DebateAttempt.attempt_number)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

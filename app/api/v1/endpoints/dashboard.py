@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user_id
 from app.db.session import get_db
+from app.schemas.auth import ClassItem, ClassListResponse
 from app.schemas.dashboard import (
     ErrorDetail,
     StudentAssignmentListResponse,
@@ -12,6 +13,7 @@ from app.schemas.dashboard import (
     TeacherDashboardSummaryResponse,
     TeacherUnsubmittedStudentsResponse,
 )
+from app.services.class_service import ClassService
 from app.services.dashboard_service import DashboardService
 
 router = APIRouter()
@@ -69,6 +71,30 @@ async def get_teacher_dashboard_summary(
     db: AsyncSession = Depends(get_db),
 ) -> TeacherDashboardSummaryResponse:
     return await DashboardService(db).get_teacher_summary(user_id)
+
+
+@router.get(
+    "/teacher/classes",
+    summary="교사 담당 학급 목록",
+    status_code=status.HTTP_200_OK,
+    response_model=ClassListResponse,
+    responses={
+        401: {"model": ErrorDetail, "description": "인증 토큰이 유효하지 않거나 만료됨"},
+        403: {"model": ErrorDetail, "description": "학생 계정으로 교사용 학급 목록 조회 시도"},
+        500: {"model": ErrorDetail, "description": "서버 내부 오류"},
+    },
+)
+async def get_teacher_classes(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> ClassListResponse:
+    classes = await ClassService(db).list_classes_for_teacher(user_id)
+    return ClassListResponse(
+        classes=[
+            ClassItem(class_id=c.class_id, grade=c.grade, class_number=c.class_number)
+            for c in classes
+        ]
+    )
 
 
 @router.get(

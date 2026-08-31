@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -18,11 +18,9 @@ class Stage1AssignmentDetail(Base):
     parameter_guide: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     default_parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 교사 입력 정답 키포인트 JSON 배열 (학생 API는 마감 후에만 노출)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     guideline: Mapped[str | None] = mapped_column(Text, nullable=True)
-    persona: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    hallucination_types: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    hallucination_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
-    expected_hallucination_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True
     )
@@ -48,6 +46,32 @@ class Stage2AssignmentDetail(Base):
     hallucinated_ai_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     hallucination_types: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     expected_error_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    generation_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Stage3AssignmentDetail(Base):
+    __tablename__ = "stage3_assignment_details"
+    __table_args__ = (
+        UniqueConstraint("assignment_id", name="uq_stage3_details_assignment_id"),
+    )
+
+    detail_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    assignment_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("assignments.assignment_id", name="fk_stage3_details_assignment"),
+        nullable=False,
+    )
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pro_persona: Mapped[str] = mapped_column(String(100), nullable=False)
+    con_persona: Mapped[str] = mapped_column(String(100), nullable=False)
+    fact_persona: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    debate_mode: Mapped[str] = mapped_column(String(10), nullable=False, server_default="v2")
+    preview_debate_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True
     )

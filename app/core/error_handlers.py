@@ -19,9 +19,12 @@ _FIELD_LABELS: dict[str, str] = {
     "name": "이름",
     "phone": "전화번호",
     "role": "role",
+    "topic": "토론 주제",
+    "pro_persona": "찬성 페르소나",
+    "con_persona": "반대 페르소나",
+    "class_id": "학급 ID",
+    "turn_id": "turn_id",
 }
-
-_SOCIAL_LOGIN_FIELDS = {"provider", "social_token"}
 
 _LOGOUT_REFRESH_TOKEN_MESSAGE = "필수 파라미터(refresh_token)가 누락되었거나 형식이 올바르지 않습니다."
 _REFRESH_TOKEN_MISSING_MESSAGE = "Refresh Token이 요청에 포함되지 않았습니다."
@@ -34,7 +37,6 @@ def _error_response(status_code: int, message: str) -> JSONResponse:
 def _build_validation_message(request: Request, exc: RequestValidationError) -> str:
     """Pydantic 검증 에러 목록에서 명세서 포맷에 맞는 메시지 한 개를 구성한다."""
 
-    is_social_signup = request.url.path.endswith("/signup") and "/social/" in request.url.path
     is_logout = request.url.path.endswith("/logout")
     is_refresh = request.url.path.endswith("/refresh")
 
@@ -62,11 +64,6 @@ def _build_validation_message(request: Request, exc: RequestValidationError) -> 
 
         if field == "refresh_token" and is_refresh:
             return _REFRESH_TOKEN_MISSING_MESSAGE
-
-        if field in _SOCIAL_LOGIN_FIELDS:
-            if is_social_signup:
-                return "필수 필드가 누락되었거나 지원하지 않는 소셜 공급자입니다."
-            return "잘못된 요청 파라미터 또는 지원하지 않는 소셜 공급자입니다."
 
         if error_type == "missing":
             label = _FIELD_LABELS.get(field, field or "필드")

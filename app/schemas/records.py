@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.models.enums import ProgressStatus
+from app.schemas.dashboard import LiteracyAxesScore
 
 
 class StudentRecordItem(BaseModel):
@@ -47,6 +48,8 @@ class TeacherRecordsStudentItem(BaseModel):
     student_id: int
     student_name: str
     stage_summary: TeacherStageSummary
+    literacy_axes: LiteracyAxesScore
+    literacy_total: int
 
 
 class TeacherRecordsStudentsResponse(BaseModel):
@@ -88,6 +91,8 @@ class TeacherGradesStudentItem(BaseModel):
     student_name: str
     average_score: float
     stage_details: TeacherStageDetails
+    literacy_axes: LiteracyAxesScore
+    literacy_total: int
 
 
 class TeacherRecordsGradesResponse(BaseModel):

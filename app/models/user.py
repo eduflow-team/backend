@@ -15,8 +15,6 @@ class User(Base):
     name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     role: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    social_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    social_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     class_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("classes.class_id", name="fk_users_class"), nullable=True
     )

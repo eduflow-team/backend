@@ -16,6 +16,17 @@ class StageSummaryItem(BaseModel):
     remaining_attempts: int | None
 
 
+class LiteracyAxesScore(BaseModel):
+    """울산형 AI 리터러시 6축 점수. 미이수는 null."""
+
+    ai_operation: int | None = None
+    hallucination: int | None = None
+    ai_response: int | None = None
+    critical: int | None = None
+    collaboration: int | None = None
+    ethics: int | None = None
+
+
 class StudentDashboardSummaryResponse(BaseModel):
     """GET /student/dashboard/summary 성공 응답.
 
@@ -28,6 +39,9 @@ class StudentDashboardSummaryResponse(BaseModel):
     total_score: int
     attendance_rate: float
     stage_summary: list[StageSummaryItem]
+    literacy_axes: LiteracyAxesScore
+    literacy_total: int
+    literacy_phase: int = 2
 
 
 class AssignmentSummaryItem(BaseModel):
@@ -38,6 +52,7 @@ class AssignmentSummaryItem(BaseModel):
     max_attempts: int | None
     score: int | None
     stage: int | None
+    set_id: int | None = None
     due_date: datetime | None
     status: ProgressStatus
 
