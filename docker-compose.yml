@@ -28,6 +28,9 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
+      # Stage4 프롬프트/방어 템플릿을 백엔드 컨테이너 내부의 /ai로 마운트
+      # (stage4_service는 runtime 기준으로 /ai/prompts/stage4를 찾는다)
+      - ../ai:/ai
     env_file:
       - .env
     environment:

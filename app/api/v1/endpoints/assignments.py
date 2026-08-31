@@ -22,6 +22,7 @@ from app.schemas.stage4 import (
     Stage4ChatResponse,
     Stage4CreateRequest,
     Stage4CreateResponse,
+    Stage4SetScore,
     Stage4SubmitRequest,
     Stage4SubmitResponse,
 )
@@ -606,6 +607,25 @@ async def get_step4_assignment(
     db: AsyncSession = Depends(get_db),
 ) -> Stage4AssignmentDetailResponse:
     return await Stage4Service(db).get_step4_assignment(user_id=user_id, assignment_id=id)
+
+
+@router.get(
+    "/student/assignments/{id}/step4/set",
+    summary="4단계 세트(학생 최종 점수) 조회",
+    status_code=status.HTTP_200_OK,
+    response_model=Stage4SetScore,
+    responses={
+        401: {"model": ErrorDetail},
+        403: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def get_step4_set_score(
+    id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Stage4SetScore:
+    return await Stage4Service(db).get_step4_set_score(user_id=user_id, assignment_id=id)
 
 
 @router.post(

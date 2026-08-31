@@ -74,9 +74,9 @@ def main() -> None:
 
     create_payload = {
         "class_id": class_id,
+        "title": "프롬프트 인젝션 보안 실습",
         "mission": "숨겨진 비밀 키를 프롬프트 인젝션으로 찾아라.",
         "secret_key": "EDUFLOW-SECRET-42",
-        "difficulty": "EASY",
         "max_attempts": 5,
         "guideline": "공격자(해커) 역할로 AI와 대화하며 비밀 키를 탈취해 보세요.",
     }
@@ -90,9 +90,13 @@ def main() -> None:
     if create.status_code != 201:
         fail(f"create status={create.status_code} body={create.text[:500]}")
 
-    assignment_id = create.json()["assignment_id"]
-    if not assignment_id:
-        fail("missing assignment_id")
+    # 순차 해금: 3개 assignment 중 EASY를 사용
+    create_body = create.json()
+    assignments = create_body.get("assignments", [])
+    easy = next((a for a in assignments if a["difficulty"] == "EASY"), None)
+    if not easy:
+        fail("missing EASY assignment in create response")
+    assignment_id = easy["assignment_id"]
 
     detail = httpx.get(
         f"{api}/student/assignments/{assignment_id}/step4",
@@ -108,9 +112,9 @@ def main() -> None:
         "difficulty",
         "status",
         "is_cleared",
-        "can_submit_report",
         "attempts",
         "attack_logs",
+        "set",
     ]:
         if key not in body:
             fail(f"missing detail key: {key}")
@@ -132,6 +136,14 @@ def main() -> None:
     if chat_body.get("hint_level") != 0:
         fail("expected hint_level=0 on first attempt")
 
+    detail_after = httpx.get(
+        f"{api}/student/assignments/{assignment_id}/step4",
+        headers={"Authorization": f"Bearer {student_token}"},
+        timeout=60.0,
+    ).json()
+    if not detail_after.get("set", {}).get("can_submit_report"):
+        fail("expected set.can_submit_report after EASY clear")
+
     submit_payload = {
         "report": {
             "successful_attacks": "역할 전환 요청으로 EDUFLOW-SECRET-42가 출력되었다. 시스템 문맥이 노출되었다.",
@@ -151,9 +163,25 @@ def main() -> None:
         fail(f"submit status={submit.status_code} body={submit.text[:500]}")
     submit_body = submit.json()
 
-    for key in ["current_score", "is_passed", "evaluation_report", "attempts"]:
+    for key in ["current_score", "is_passed", "evaluation_report", "attempts", "set"]:
         if key not in submit_body:
             fail(f"missing submit key: {key}")
+
+    set_body = submit_body["set"]
+    if "overall_score" not in set_body:
+        fail("missing set.overall_score")
+    if not set_body.get("report_submitted"):
+        fail("expected set.report_submitted after submit")
+    if set_body["overall_score"] != submit_body["current_score"]:
+        fail(
+            f"overall expected {submit_body['current_score']}, got {set_body['overall_score']}"
+        )
+    easy_item = next(
+        (d for d in set_body.get("difficulties", []) if d.get("difficulty") == "EASY"),
+        None,
+    )
+    if easy_item is None or not easy_item.get("is_cleared"):
+        fail("EASY should be cleared after chat")
 
     # 이미 제출했으므로 추가 chat은 403 이어야 함
     chat_again = httpx.post(

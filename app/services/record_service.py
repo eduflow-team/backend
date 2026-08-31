@@ -17,6 +17,7 @@ from app.repositories.evaluation import EvaluationRepository
 from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.submission import SubmissionRepository
 from app.repositories.user import UserRepository
+from app.schemas.dashboard import LiteracyAxesScore
 from app.schemas.records import (
     StudentRecordItem,
     StudentRecordsResponse,
@@ -29,6 +30,12 @@ from app.schemas.records import (
     TeacherStageDetails,
     TeacherStageSummary,
     TeacherStageSummaryItem,
+)
+from app.services.grading.literacy_scorer import (
+    LITERACY_SCORE_PHASE,
+    StageScoreInput,
+    derive_literacy,
+    parse_literacy_axes_payload,
 )
 
 _TOTAL_STAGE_COUNT = 4
@@ -98,12 +105,19 @@ class RecordService:
         ]
         statuses = await self.student_status_repository.list_by_assignment_ids(assignment_ids)
         statuses_by_student = self._group_statuses_by_student(statuses)
+        finals = await self.submission_repository.list_finals_by_users(
+            [s.user_id for s in students]
+        )
+        finals_by_student: dict[int, list[Submission]] = defaultdict(list)
+        for final in finals:
+            finals_by_student[final.user_id].append(final)
 
         items = [
             self._build_teacher_records_student_item(
                 student,
                 latest_assignment_by_class.get(student.class_id or -1, {}),
                 statuses_by_student.get(student.user_id, {}),
+                finals_by_student.get(student.user_id, []),
             )
             for student in students
         ]
@@ -128,6 +142,12 @@ class RecordService:
         evaluations_by_user_assignment = await self._load_evaluations_by_user_assignment(
             assignment_ids
         )
+        finals = await self.submission_repository.list_finals_by_users(
+            [s.user_id for s in students]
+        )
+        finals_by_student: dict[int, list[Submission]] = defaultdict(list)
+        for final in finals:
+            finals_by_student[final.user_id].append(final)
 
         stage_scores_by_stage: dict[int, list[int]] = defaultdict(list)
         student_items: list[TeacherGradesStudentItem] = []
@@ -144,6 +164,7 @@ class RecordService:
                     status_by_assignment_id,
                     evaluations_by_user_assignment,
                     stage_scores_by_stage,
+                    finals_by_student.get(student.user_id, []),
                 )
             )
 
@@ -266,6 +287,7 @@ class RecordService:
         student: User,
         latest_assignment_by_stage: dict[int, Assignment],
         status_by_assignment_id: dict[int, StudentAssignmentStatus],
+        finals: list[Submission] | None = None,
     ) -> TeacherRecordsStudentItem:
         stage_items = {
             f"stage_{stage}": self._build_teacher_stage_summary_item(
@@ -279,7 +301,70 @@ class RecordService:
             student_id=student.user_id,
             student_name=student.name or "",
             stage_summary=TeacherStageSummary(**stage_items),
+            **self._literacy_fields(
+                latest_assignment_by_stage,
+                status_by_assignment_id,
+                finals or [],
+            ),
         )
+
+    def _literacy_fields(
+        self,
+        latest_assignment_by_stage: dict[int, Assignment],
+        status_by_assignment_id: dict[int, StudentAssignmentStatus],
+        finals: list[Submission] | None = None,
+    ) -> dict[str, object]:
+        axes_by_stage = self._axes_by_stage_from_finals(
+            finals or [], latest_assignment_by_stage
+        )
+        inputs: list[StageScoreInput] = []
+        for stage, assignment in latest_assignment_by_stage.items():
+            status_row = status_by_assignment_id.get(assignment.assignment_id)
+            progress_status = self._resolve_progress_status(status_row)
+            if (
+                progress_status != ProgressStatus.COMPLETED.value
+                or status_row is None
+                or status_row.best_score is None
+            ):
+                continue
+            inputs.append(
+                StageScoreInput(
+                    stage=stage,
+                    score=status_row.best_score,
+                    status=progress_status,
+                    literacy_axes=axes_by_stage.get(stage),
+                )
+            )
+        literacy = derive_literacy(stage_scores=inputs, phase=LITERACY_SCORE_PHASE)
+        return {
+            "literacy_axes": LiteracyAxesScore(**literacy.as_dict()),
+            "literacy_total": literacy.total(),
+        }
+
+    @staticmethod
+    def _axes_by_stage_from_finals(
+        finals: list[Submission],
+        latest_assignment_by_stage: dict[int, Assignment],
+    ) -> dict[int, dict]:
+        assignment_stage = {
+            a.assignment_id: stage for stage, a in latest_assignment_by_stage.items()
+        }
+        out: dict[int, dict] = {}
+        for sub in finals:
+            params = sub.final_parameters or {}
+            axes = parse_literacy_axes_payload(params.get("literacy_axes"))
+            if axes is None and isinstance(params.get("evaluation_report"), dict):
+                axes = parse_literacy_axes_payload(
+                    params["evaluation_report"].get("literacy_axes")
+                )
+            if not axes:
+                continue
+            stage = sub.stage if sub.stage is not None else assignment_stage.get(
+                sub.assignment_id
+            )
+            if stage is not None:
+                out[int(stage)] = axes
+        return out
 
     def _build_teacher_stage_summary_item(
         self,
@@ -308,6 +393,7 @@ class RecordService:
         status_by_assignment_id: dict[int, StudentAssignmentStatus],
         evaluations_by_user_assignment: dict[tuple[int, int], Evaluation],
         stage_scores_by_stage: dict[int, list[int]],
+        finals: list[Submission] | None = None,
     ) -> TeacherGradesStudentItem:
         stage_items: dict[str, TeacherStageDetailItem] = {}
         completed_scores: list[int] = []
@@ -355,6 +441,11 @@ class RecordService:
             student_name=student.name or "",
             average_score=average_score,
             stage_details=TeacherStageDetails(**stage_items),
+            **self._literacy_fields(
+                latest_assignment_by_stage,
+                status_by_assignment_id,
+                finals or [],
+            ),
         )
 
     def _build_stage_averages(

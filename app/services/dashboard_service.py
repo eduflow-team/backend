@@ -21,9 +21,11 @@ from app.repositories.attendance import AttendanceRepository
 from app.services.attendance_stats import compute_attendance_summary
 from app.repositories.class_ import ClassRepository
 from app.repositories.student_status import StudentAssignmentStatusRepository
+from app.repositories.submission import SubmissionRepository
 from app.repositories.user import UserRepository
 from app.schemas.dashboard import (
     AssignmentSummaryItem,
+    LiteracyAxesScore,
     StageSubmissionRateItem,
     StageSummaryItem,
     StudentAssignmentListResponse,
@@ -34,6 +36,13 @@ from app.schemas.dashboard import (
     UnsubmittedStudentItem,
     TeacherAssignmentItem,
 )
+from app.services.grading.literacy_scorer import (
+    LITERACY_SCORE_PHASE,
+    StageScoreInput,
+    derive_literacy,
+    parse_literacy_axes_payload,
+)
+from app.models.submission import Submission
 
 _TOTAL_STAGE_COUNT = 4
 _KNOWN_PROGRESS_STATUSES = {s.value for s in ProgressStatus}
@@ -47,6 +56,7 @@ class DashboardService:
         self.assignment_repository = AssignmentRepository(session)
         self.student_status_repository = StudentAssignmentStatusRepository(session)
         self.attendance_repository = AttendanceRepository(session)
+        self.submission_repository = SubmissionRepository(session)
 
     async def get_student_summary(self, user_id: int) -> StudentDashboardSummaryResponse:
         user = await self._get_authorized_student(user_id)
@@ -65,9 +75,24 @@ class DashboardService:
             for stage in range(1, _TOTAL_STAGE_COUNT + 1)
         ]
 
-        total_score = sum(
-            s.total_literacy_score for s in statuses if s.total_literacy_score is not None
+        published: list[Assignment] = []
+        if user.class_id is not None:
+            published = await self.assignment_repository.list_published_by_class(
+                user.class_id
+            )
+        finals = await self.submission_repository.list_finals_by_user(user_id)
+        literacy = derive_literacy(
+            stage_scores=self._collect_stage_score_inputs(
+                published,
+                status_by_assignment_id,
+                finals,
+            ),
+            phase=LITERACY_SCORE_PHASE,
         )
+        literacy_axes = LiteracyAxesScore(**literacy.as_dict())
+        literacy_total = literacy.total()
+        # 레거시 total_score는 Stage2 total_literacy 합이었음 → 6축 평균으로 통일
+        total_score = literacy_total
         attendance_rate = await self._get_attendance_rate(user_id)
 
         return StudentDashboardSummaryResponse(
@@ -75,6 +100,9 @@ class DashboardService:
             total_score=total_score,
             attendance_rate=attendance_rate,
             stage_summary=stage_summary,
+            literacy_axes=literacy_axes,
+            literacy_total=literacy_total,
+            literacy_phase=LITERACY_SCORE_PHASE,
         )
 
     async def get_student_assignments(self, user_id: int) -> StudentAssignmentListResponse:
@@ -247,6 +275,82 @@ class DashboardService:
         assignments = await self.assignment_repository.list_by_class(class_id)
         return self._group_latest_by_stage(assignments)
 
+    def _collect_stage_score_inputs(
+        self,
+        assignments: list[Assignment],
+        status_by_assignment_id: dict[int, StudentAssignmentStatus],
+        finals: list[Submission] | None = None,
+    ) -> list[StageScoreInput]:
+        """혼합 환산용: COMPLETED best_score + (있으면) final literacy_axes."""
+        axes_by_assignment = self._literacy_axes_by_assignment(finals or [])
+        axes_by_stage = self._literacy_axes_by_stage(finals or [], assignments)
+
+        inputs: list[StageScoreInput] = []
+        for assignment in assignments:
+            if assignment.stage is None:
+                continue
+            status_row = status_by_assignment_id.get(assignment.assignment_id)
+            progress_status, score = self._resolve_progress(status_row)
+            if score is None:
+                continue
+            stage = int(assignment.stage)
+            axes = axes_by_assignment.get(assignment.assignment_id) or axes_by_stage.get(
+                stage
+            )
+            inputs.append(
+                StageScoreInput(
+                    stage=stage,
+                    score=score,
+                    status=progress_status,
+                    literacy_axes=axes,
+                )
+            )
+        return inputs
+
+    @staticmethod
+    def _literacy_axes_by_assignment(
+        finals: list[Submission],
+    ) -> dict[int, dict]:
+        out: dict[int, dict] = {}
+        for sub in finals:
+            params = sub.final_parameters or {}
+            axes = parse_literacy_axes_payload(params.get("literacy_axes"))
+            if axes is None and isinstance(params.get("evaluation_report"), dict):
+                axes = parse_literacy_axes_payload(
+                    params["evaluation_report"].get("literacy_axes")
+                )
+            if axes:
+                out[sub.assignment_id] = axes
+        return out
+
+    @staticmethod
+    def _literacy_axes_by_stage(
+        finals: list[Submission],
+        assignments: list[Assignment],
+    ) -> dict[int, dict]:
+        """assignment_id가 세트의 다른 난이도여도 stage로 축값을 붙이기 위함."""
+        assignment_stage = {
+            a.assignment_id: int(a.stage)
+            for a in assignments
+            if a.stage is not None
+        }
+        out: dict[int, dict] = {}
+        for sub in finals:
+            params = sub.final_parameters or {}
+            axes = parse_literacy_axes_payload(params.get("literacy_axes"))
+            if axes is None and isinstance(params.get("evaluation_report"), dict):
+                axes = parse_literacy_axes_payload(
+                    params["evaluation_report"].get("literacy_axes")
+                )
+            if not axes:
+                continue
+            stage = sub.stage if sub.stage is not None else assignment_stage.get(
+                sub.assignment_id
+            )
+            if stage is not None:
+                out[int(stage)] = axes
+        return out
+
     def _group_latest_by_stage(self, assignments: list[Assignment]) -> dict[int, Assignment]:
         latest_by_stage: dict[int, Assignment] = {}
         for assignment in assignments:
@@ -361,6 +465,7 @@ class DashboardService:
             max_attempts=assignment.max_attempts,
             score=score,
             stage=assignment.stage,
+            set_id=assignment.set_id,
             due_date=assignment.due_at,
             status=progress_status,
         )

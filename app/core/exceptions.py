@@ -452,6 +452,13 @@ class Stage4AccessForbiddenError(DomainException):
     default_message = "해당 4단계 과제에 접근할 권한이 없습니다."
 
 
+class Stage4DifficultyLockedError(DomainException):
+    """이전 난이도를 클리어하지 않아 잠긴 난이도에 접근할 때 (403)."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    default_message = "이전 난이도를 먼저 클리어해야 합니다."
+
+
 class InvalidStage4CreateError(DomainException):
     """4단계 생성/채팅 입력 데이터가 누락되었거나 형식이 올바르지 않을 때 (400)."""
 

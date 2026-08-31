@@ -22,6 +22,7 @@ from app.core.exceptions import (
     InvalidStage4CreateError,
     InvalidTokenError,
     Stage4AccessForbiddenError,
+    Stage4DifficultyLockedError,
     Stage4LangflowServiceUnavailableError,
     Stage4ReportAlreadySubmittedError,
     Stage4ReportNotAvailableError,
@@ -37,14 +38,25 @@ from app.repositories.class_ import ClassRepository
 from app.repositories.student_status import StudentAssignmentStatusRepository
 from app.repositories.submission import SubmissionRepository
 from app.repositories.user import UserRepository
-from app.services.grading.stage4_grader import Stage4Grader, Stage4ReportInput
+from app.services.grading.stage4_grader import (
+    PASS_THRESHOLD,
+    Stage4Grader,
+    Stage4ReportInput,
+)
 from app.schemas.stage4 import (
     Difficulty,
     Stage4AssignmentDetailResponse,
     Stage4ChatResponse,
     Stage4CreateRequest,
     Stage4CreateResponse,
+    Stage4DifficultyAssignment,
+    Stage4DifficultyHints,
+    Stage4DifficultyScoreItem,
+    Stage4EvaluationReport,
+    Stage4HintItem,
+    Stage4LiteracyAxesScore,
     Stage4Report,
+    Stage4SetScore,
     Stage4SubmitRequest,
     Stage4SubmitResponse,
 )
@@ -75,8 +87,10 @@ class Stage4Service:
             Path(__file__).resolve().parents[3] / "ai" / "prompts" / "stage4"
         )
 
+    _DIFFICULTIES: list[Difficulty] = ["EASY", "NORMAL", "HARD"]
+
     # ------------------------------------------------------------------
-    # Teacher: create
+    # Teacher: create (3개 난이도 동시 생성, 순차 해금)
     # ------------------------------------------------------------------
     async def create_step4_assignment(
         self, *, user_id: int, payload: Stage4CreateRequest
@@ -87,25 +101,41 @@ class Stage4Service:
         if payload.class_id not in allowed_class_ids:
             raise Stage4AccessForbiddenError()
 
-        assignment = Assignment(
-            teacher_id=teacher.user_id,
-            class_id=payload.class_id,
-            title="4단계: 프롬프트 인젝션 보안 실습",
-            stage=4,
-            subject="ai",
-            description=self._encode_detail(payload),
-            max_attempts=payload.max_attempts,
-        )
-        assignment = await self.assignment_repository.create(assignment)
+        set_title = payload.title.strip() or "4단계: 프롬프트 인젝션 보안 실습"
+
+        created: list[Assignment] = []
+        for diff in self._DIFFICULTIES:
+            assignment = Assignment(
+                teacher_id=teacher.user_id,
+                class_id=payload.class_id,
+                title=set_title,
+                stage=4,
+                subject="ai",
+                description=self._encode_detail_with_difficulty(payload, diff),
+                max_attempts=payload.max_attempts,
+            )
+            assignment = await self.assignment_repository.create(assignment)
+            created.append(assignment)
+
+        # 첫 번째 assignment_id를 set_id로 사용
+        set_id = created[0].assignment_id
+        for a in created:
+            a.set_id = set_id
 
         await self.session.commit()
 
         return Stage4CreateResponse(
-            assignment_id=assignment.assignment_id,
-            title=assignment.title or "",
+            set_id=set_id,
+            title=set_title,
             mission=payload.mission,
-            difficulty=payload.difficulty,
             max_attempts=payload.max_attempts,
+            assignments=[
+                Stage4DifficultyAssignment(
+                    assignment_id=a.assignment_id,
+                    difficulty=json.loads(a.description or "{}").get("difficulty", "NORMAL"),
+                )
+                for a in created
+            ],
         )
 
     # ------------------------------------------------------------------
@@ -135,11 +165,12 @@ class Stage4Service:
         remaining = max(0, max_attempts - used_attempts)
 
         is_cleared = any(a["attack_success"] for a in attempts)
-
-        existing_final = await self.submission_repository.get_final_by_user_and_assignment(
-            student.user_id, assignment_id
+        failed_count = sum(1 for a in attempts if not a["attack_success"])
+        hint_obj = self.grader.hint_for(
+            difficulty=detail.difficulty,
+            failed_count=failed_count,
+            is_cleared=is_cleared,
         )
-        can_submit_report = is_cleared and existing_final is None
 
         attack_logs = [
             {
@@ -152,21 +183,33 @@ class Stage4Service:
             for a in sorted(attempts, key=lambda x: x["attempt_no"])
         ]
 
+        unlocked = await self._is_difficulty_unlocked(student, assignment)
+
         return Stage4AssignmentDetailResponse(
             assignment_id=assignment.assignment_id,
             title=assignment.title or "",
             mission=detail.mission,
             guideline=detail.guideline,
             difficulty=detail.difficulty,
+            unlocked=unlocked,
             status=status.progress_status or ProgressStatus.IN_PROGRESS.value,
             is_cleared=is_cleared,
-            can_submit_report=can_submit_report,
             attempts={
                 "max_attempts": max_attempts,
                 "used_attempts": used_attempts,
                 "remaining_attempts": remaining,
             },
             attack_logs=attack_logs,
+            hint_level=hint_obj.hint_level,
+            hint=hint_obj.hint if hint_obj.hint_level > 0 else None,
+            hints=[
+                Stage4HintItem.model_validate(item)
+                for item in self.grader.hints_catalog(
+                    difficulty=detail.difficulty,
+                    hint_level=hint_obj.hint_level,
+                )
+            ],
+            set=await self._build_set_score(student, assignment),
         )
 
     # ------------------------------------------------------------------
@@ -179,6 +222,10 @@ class Stage4Service:
         assignment = await self._get_stage4_assignment_for_student(
             student, assignment_id
         )
+
+        if not await self._is_difficulty_unlocked(student, assignment):
+            raise Stage4DifficultyLockedError()
+
         detail = self._decode_detail(assignment)
 
         if not attack_prompt.strip():
@@ -189,10 +236,8 @@ class Stage4Service:
             student.user_id, assignment_id, remaining_attempts=max_attempts
         )
 
-        existing_final = await self.submission_repository.get_final_by_user_and_assignment(
-            student.user_id, assignment_id
-        )
-        if existing_final is not None:
+        set_id = assignment.set_id or assignment.assignment_id
+        if await self._get_set_report_submission(student.user_id, set_id) is not None:
             raise Stage4ReportAlreadySubmittedError()
 
         attempts = await self._list_stage4_chat_attempts(
@@ -300,52 +345,30 @@ class Stage4Service:
         assignment = await self._get_stage4_assignment_for_student(
             student, assignment_id
         )
-        detail = self._decode_detail(assignment)
 
-        max_attempts = assignment.max_attempts or 10
+        set_id = assignment.set_id or assignment.assignment_id
+        siblings = await self._list_set_siblings(assignment)
 
-        attempts = await self._list_stage4_chat_attempts(
-            student.user_id, assignment_id
-        )
-        is_cleared = any(a["attack_success"] for a in attempts)
-        if not is_cleared:
-            raise Stage4ReportNotAvailableError()
-
-        existing_final = await self.submission_repository.get_final_by_user_and_assignment(
-            student.user_id, assignment_id
-        )
-        if existing_final is not None:
+        if await self._get_set_report_submission(student.user_id, set_id) is not None:
             raise Stage4ReportAlreadySubmittedError()
 
-        # first clear attempt_no
-        first_clear = min(
-            (a for a in attempts if a["attack_success"]),
-            key=lambda x: x["attempt_no"],
-        )
-        attempts_used_at_clear = first_clear["attempt_no"]
-
         report: Stage4Report = payload.report
-        evaluation = self.grader.evaluate_report(
-            report=Stage4ReportInput(**report.model_dump()),
-            attempts_used_at_clear=attempts_used_at_clear,
-            max_attempts=max_attempts,
-            difficulty=detail.difficulty,
+        evaluation, current_score = await self._evaluate_set_report(
+            student, siblings, report
         )
 
-        status = await self.status_repository.get_or_create(
-            student.user_id, assignment_id, remaining_attempts=max_attempts
-        )
-
-        # remaining attempts at submission time
-        used_attempts = len(attempts)
-        remaining = max(0, max_attempts - used_attempts)
+        anchor_id = set_id
+        anchor = next((s for s in siblings if s.assignment_id == anchor_id), assignment)
+        max_attempts = anchor.max_attempts or 10
 
         submission = Submission(
             user_id=student.user_id,
-            assignment_id=assignment_id,
+            assignment_id=anchor_id,
             stage=4,
             submitted_answer=json.dumps(report.model_dump(), ensure_ascii=False),
             final_parameters={
+                "scope": "set",
+                "set_id": set_id,
                 "report": report.model_dump(),
                 "evaluation_report": {
                     "clear_score": evaluation.clear_score,
@@ -353,36 +376,84 @@ class Stage4Service:
                     "analysis_score": evaluation.analysis_score,
                     "feedback": evaluation.feedback,
                     "analysis_breakdown": evaluation.analysis_breakdown,
+                    "literacy_axes": (
+                        evaluation.literacy_axes.as_dict()
+                        if evaluation.literacy_axes
+                        else None
+                    ),
                 },
+                "literacy_axes": (
+                    evaluation.literacy_axes.as_dict()
+                    if evaluation.literacy_axes
+                    else None
+                ),
             },
-            current_score=evaluation.current_score,
+            current_score=current_score,
             is_final=True,
         )
         await self.submission_repository.create(submission)
 
-        await self.status_repository.update_progress(
-            status,
-            progress_status=ProgressStatus.COMPLETED.value,
-            best_score=evaluation.current_score,
-            remaining_attempts=remaining,
-        )
+        for sibling in siblings:
+            sib_attempts = await self._list_stage4_chat_attempts(
+                student.user_id, sibling.assignment_id
+            )
+            sib_max = sibling.max_attempts or 10
+            sib_used = len(sib_attempts)
+            sib_remaining = max(0, sib_max - sib_used)
+            sib_status = await self.status_repository.get_or_create(
+                student.user_id, sibling.assignment_id, remaining_attempts=sib_max
+            )
+            await self.status_repository.update_progress(
+                sib_status,
+                progress_status=ProgressStatus.COMPLETED.value,
+                best_score=current_score,
+                remaining_attempts=sib_remaining,
+            )
+
         await self.session.commit()
 
+        set_score = await self._build_set_score(student, assignment)
+
         return Stage4SubmitResponse(
-            current_score=evaluation.current_score,
-            is_passed=evaluation.is_passed,
+            current_score=current_score,
+            is_passed=current_score >= PASS_THRESHOLD,
             evaluation_report={
                 "clear_score": evaluation.clear_score,
                 "efficiency_score": evaluation.efficiency_score,
                 "analysis_score": evaluation.analysis_score,
                 "feedback": evaluation.feedback,
+                "literacy_axes": (
+                    evaluation.literacy_axes.as_dict()
+                    if evaluation.literacy_axes
+                    else None
+                ),
             },
             attempts={
                 "max_attempts": max_attempts,
-                "used_attempts": used_attempts,
-                "remaining_attempts": remaining,
+                "used_attempts": len(
+                    await self._list_stage4_chat_attempts(student.user_id, anchor_id)
+                ),
+                "remaining_attempts": max(
+                    0,
+                    max_attempts
+                    - len(
+                        await self._list_stage4_chat_attempts(
+                            student.user_id, anchor_id
+                        )
+                    ),
+                ),
             },
+            set=set_score,
         )
+
+    async def get_step4_set_score(
+        self, *, user_id: int, assignment_id: int
+    ) -> Stage4SetScore:
+        student = await self._get_authorized_student(user_id)
+        assignment = await self._get_stage4_assignment_for_student(
+            student, assignment_id
+        )
+        return await self._build_set_score(student, assignment)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -410,6 +481,8 @@ class Stage4Service:
             class_ids.add(teacher.class_id)
         return class_ids
 
+    _DIFF_ORDER: dict[str, int] = {"EASY": 0, "NORMAL": 1, "HARD": 2}
+
     async def _get_stage4_assignment_for_student(
         self, student: User, assignment_id: int
     ) -> Assignment:
@@ -420,12 +493,254 @@ class Stage4Service:
             raise Stage4AccessForbiddenError()
         return assignment
 
+    async def _is_difficulty_unlocked(
+        self, student: User, assignment: Assignment
+    ) -> bool:
+        """EASY는 항상 해금. NORMAL은 EASY 클리어 후, HARD는 NORMAL 클리어 후."""
+        detail = self._decode_detail(assignment)
+        diff = detail.difficulty.upper()
+
+        if diff == "EASY":
+            return True
+
+        if assignment.set_id is None:
+            return True
+
+        siblings = await self.assignment_repository.list_by_set_id(assignment.set_id)
+
+        prev_diff = "EASY" if diff == "NORMAL" else "NORMAL"
+        prev_assignment = next(
+            (
+                a
+                for a in siblings
+                if json.loads(a.description or "{}").get("difficulty", "").upper() == prev_diff
+            ),
+            None,
+        )
+        if prev_assignment is None:
+            return True
+
+        prev_attempts = await self._list_stage4_chat_attempts(
+            student.user_id, prev_assignment.assignment_id
+        )
+        return any(a["attack_success"] for a in prev_attempts)
+
+    async def _list_set_siblings(self, assignment: Assignment) -> list[Assignment]:
+        if assignment.set_id is not None:
+            return await self.assignment_repository.list_by_set_id(assignment.set_id)
+        return [assignment]
+
+    async def _get_set_report_submission(
+        self, user_id: int, set_id: int
+    ) -> Submission | None:
+        return await self.submission_repository.get_final_by_user_and_assignment(
+            user_id, set_id
+        )
+
+    async def _evaluate_set_report(
+        self,
+        student: User,
+        siblings: list[Assignment],
+        report: Stage4Report,
+    ) -> tuple[object, int]:
+        from app.services.grading.stage4_grader import (
+            CLEAR_BY_DIFFICULTY,
+            Stage4EvaluationReport as GraderEvaluationReport,
+            score_clear,
+            score_literacy_axes,
+        )
+
+        cleared_stats: list[tuple[str, int, int]] = []
+        for sibling in siblings:
+            attempts = await self._list_stage4_chat_attempts(
+                student.user_id, sibling.assignment_id
+            )
+            successes = [a for a in attempts if a["attack_success"]]
+            if not successes:
+                continue
+            first_clear = min(successes, key=lambda x: x["attempt_no"])
+            detail = self._decode_detail(sibling)
+            cleared_stats.append(
+                (
+                    (detail.difficulty or "NORMAL").upper(),
+                    first_clear["attempt_no"],
+                    sibling.max_attempts or 10,
+                )
+            )
+
+        if not cleared_stats:
+            raise Stage4ReportNotAvailableError()
+
+        cleared_diffs = [diff for diff, _used, _mx in cleared_stats]
+        clear_score = score_clear(cleared_diffs)
+        hard_clear_points = CLEAR_BY_DIFFICULTY["HARD"] if "HARD" in cleared_diffs else 0
+        efficiency_scores = [
+            self.grader.score_efficiency(
+                attempts_used=used,
+                max_attempts=mx,
+                difficulty=diff,
+            )
+            for diff, used, mx in cleared_stats
+        ]
+        efficiency_score = round(sum(efficiency_scores) / len(efficiency_scores))
+        analysis, notes, breakdown = self.grader.score_analysis(
+            Stage4ReportInput(**report.model_dump())
+        )
+        literacy_axes = score_literacy_axes(
+            clear_score=clear_score,
+            efficiency_score=efficiency_score,
+            breakdown=breakdown,
+            hard_clear_points=hard_clear_points,
+        )
+
+        if not notes:
+            feedback = "클리어에 성공했고, 실패 원인과 방어 아이디어도 잘 정리했습니다."
+        elif analysis >= 20:
+            feedback = "클리어에 성공했습니다. " + " ".join(notes[:2])
+        else:
+            feedback = "클리어는 했지만 보고서가 부족합니다. " + " ".join(notes)
+
+        evaluation = GraderEvaluationReport(
+            clear_score=clear_score,
+            efficiency_score=efficiency_score,
+            analysis_score=analysis,
+            feedback=feedback,
+            analysis_breakdown=breakdown,
+            literacy_axes=literacy_axes,
+        )
+        return evaluation, evaluation.current_score
+
+    async def _build_set_score(
+        self, student: User, assignment: Assignment
+    ) -> Stage4SetScore:
+        siblings = await self._list_set_siblings(assignment)
+        set_id = assignment.set_id or assignment.assignment_id
+        items: list[Stage4DifficultyScoreItem] = []
+        difficulty_hints: list[Stage4DifficultyHints] = []
+        cleared_count = 0
+
+        for sibling in siblings:
+            detail = self._decode_detail(sibling)
+            difficulty = (detail.difficulty or "NORMAL").upper()
+            attempts = await self._list_stage4_chat_attempts(
+                student.user_id, sibling.assignment_id
+            )
+            is_cleared = any(a["attack_success"] for a in attempts)
+            failed_count = sum(1 for a in attempts if not a["attack_success"])
+            hint_obj = self.grader.hint_for(
+                difficulty=difficulty,
+                failed_count=failed_count,
+                is_cleared=is_cleared,
+            )
+            difficulty_hints.append(
+                Stage4DifficultyHints(
+                    difficulty=difficulty,  # type: ignore[arg-type]
+                    hint_level=hint_obj.hint_level,
+                    hints=[
+                        Stage4HintItem.model_validate(item)
+                        for item in self.grader.hints_catalog(
+                            difficulty=difficulty,
+                            hint_level=hint_obj.hint_level,
+                        )
+                    ],
+                )
+            )
+            if is_cleared:
+                cleared_count += 1
+            items.append(
+                Stage4DifficultyScoreItem(
+                    assignment_id=sibling.assignment_id,
+                    difficulty=difficulty,  # type: ignore[arg-type]
+                    unlocked=await self._is_difficulty_unlocked(student, sibling),
+                    is_cleared=is_cleared,
+                )
+            )
+
+        items.sort(key=lambda x: self._DIFF_ORDER.get(x.difficulty, 99))
+        difficulty_hints.sort(key=lambda x: self._DIFF_ORDER.get(x.difficulty, 99))
+
+        set_report = await self._get_set_report_submission(student.user_id, set_id)
+        submitted_report, evaluation_report, current_score, is_passed = (
+            self._parse_submitted_report(set_report)
+        )
+        report_submitted = set_report is not None
+        can_submit_report = cleared_count > 0 and not report_submitted
+        overall = current_score if current_score is not None else 0
+
+        return Stage4SetScore(
+            set_id=set_id,
+            overall_score=overall,
+            is_passed=is_passed if is_passed is not None else overall >= PASS_THRESHOLD,
+            cleared_count=cleared_count,
+            can_submit_report=can_submit_report,
+            report_submitted=report_submitted,
+            submitted_report=submitted_report,
+            evaluation_report=evaluation_report,
+            current_score=current_score,
+            difficulties=items,
+            difficulty_hints=difficulty_hints,
+        )
+
+    def _parse_submitted_report(
+        self, final: Submission | None
+    ) -> tuple[Stage4Report | None, Stage4EvaluationReport | None, int | None, bool | None]:
+        if final is None:
+            return None, None, None, None
+
+        params = final.final_parameters or {}
+        report_data = params.get("report")
+        eval_data = params.get("evaluation_report")
+
+        submitted_report: Stage4Report | None = None
+        if isinstance(report_data, dict):
+            try:
+                submitted_report = Stage4Report.model_validate(report_data)
+            except Exception:
+                pass
+        elif final.submitted_answer:
+            try:
+                submitted_report = Stage4Report.model_validate(json.loads(final.submitted_answer))
+            except Exception:
+                pass
+
+        evaluation_report: Stage4EvaluationReport | None = None
+        if isinstance(eval_data, dict):
+            try:
+                lit_raw = eval_data.get("literacy_axes") or params.get("literacy_axes")
+                lit = None
+                if isinstance(lit_raw, dict):
+                    lit = Stage4LiteracyAxesScore(
+                        ethics=int(lit_raw.get("ethics", 0)),
+                        critical=int(lit_raw.get("critical", 0)),
+                        collaboration=int(lit_raw.get("collaboration", 0)),
+                    )
+                evaluation_report = Stage4EvaluationReport(
+                    clear_score=int(eval_data.get("clear_score", 0)),
+                    efficiency_score=int(eval_data.get("efficiency_score", 0)),
+                    analysis_score=int(eval_data.get("analysis_score", 0)),
+                    feedback=str(eval_data.get("feedback") or ""),
+                    literacy_axes=lit,
+                )
+            except Exception:
+                pass
+
+        current_score = final.current_score
+        is_passed = (
+            current_score >= PASS_THRESHOLD if current_score is not None else None
+        )
+        return submitted_report, evaluation_report, current_score, is_passed
+
     def _encode_detail(self, payload: Stage4CreateRequest) -> str:
+        return self._encode_detail_with_difficulty(payload, "NORMAL")
+
+    def _encode_detail_with_difficulty(
+        self, payload: Stage4CreateRequest, difficulty: str
+    ) -> str:
         data = {
             "mission": payload.mission,
             "guideline": payload.guideline,
             "secret_key": payload.secret_key,
-            "difficulty": payload.difficulty,
+            "difficulty": difficulty,
         }
         return json.dumps(data, ensure_ascii=False)
 
