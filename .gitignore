@@ -47,6 +47,3 @@ docker-compose.override.yml
 storage/
 app/static/uploads/
 uploads/
-
-# Stage1 로컬 기획 메모 (GitHub 미포함)
-docs/stage1-redesign-checklist.md
