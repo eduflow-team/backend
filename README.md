@@ -13,6 +13,7 @@
 </div>
 
 ## Architecture
+<img width="2187" height="1087" alt="스크린샷 2026-09-02 050611" src="https://github.com/user-attachments/assets/9c371dad-c63e-4855-aeee-755a4dde9e02" />
 
 <!-- 아키텍처 다이어그램: docs/architecture.png 추가 후 아래 주석 해제
 <div align="center">
