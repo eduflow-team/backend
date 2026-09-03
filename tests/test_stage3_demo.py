@@ -20,8 +20,14 @@ def test_demo_payload_has_turns_and_real_sources() -> None:
     sources = find_turn_sources(payload, turn_id="pro-1")
     assert sources
     assert all(item.get("url") for item in sources)
-    claims = [c for t in payload["turns"] for c in (t.get("claims") or [])]
-    flawed = [c for c in claims if c.get("verdict") in {"false", "exaggerated"}]
-    supported = [c for c in claims if c.get("verdict") == "supported"]
-    assert len(flawed) >= 2
-    assert len(supported) >= 4
+    flawed_turns = [
+        turn["id"]
+        for turn in payload["turns"]
+        if any(c.get("verdict") in {"false", "exaggerated"} for c in (turn.get("claims") or []))
+    ]
+    assert flawed_turns == ["con-1", "pro-3"]
+    con_sources = find_turn_sources(payload, turn_id="con-1")
+    assert any("korea.kr" in (s.get("url") or "") for s in con_sources)
+    assert any("dongascience" in (s.get("url") or "") for s in con_sources)
+    pro_sources = find_turn_sources(payload, turn_id="pro-3")
+    assert any("zdnet.co.kr" in (s.get("url") or "") for s in pro_sources)
