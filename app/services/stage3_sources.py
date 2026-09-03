@@ -6,13 +6,17 @@ import html
 import logging
 import re
 import xml.etree.ElementTree as ET
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, unquote, urlparse
+
+import time
 
 import httpx
 
 from app.services.stage3_debate import NEEDS_CHECK, overlap_ratio
 
 logger = logging.getLogger(__name__)
+
+_google_news_blocked_until: float = 0.0
 
 _ARTICLE_REF = re.compile(r"[\[(]?기사\s*(\d+)[\])]?")
 
@@ -23,7 +27,7 @@ def _norm_text(text: str) -> str:
 
 _MOCK_TITLE_SUFFIX = re.compile(r"\s*—\s*.+$")
 _PLACEHOLDER_URL = re.compile(
-    r"news\.google\.com/search\?|search\.naver\.com/search\.naver",
+    r"news\.google\.com/search\?|search\.naver\.com/search\.naver|bing\.com/news/apiclick",
     re.I,
 )
 
@@ -89,6 +93,13 @@ def _parse_rss(raw: bytes, kind: str) -> list[dict]:
             link = html.unescape(href.group(1))
         if "news.google.com/rss/articles/" in link:
             link = link.replace("/rss/articles/", "/articles/")
+        link = _unwrap_news_url(link)
+        if not source:
+            for child in list(item):
+                tag = (child.tag or "").lower()
+                if tag.endswith("source") and (child.text or "").strip():
+                    source = child.text.strip()
+                    break
         if " - " in title and not source:
             title, source = title.rsplit(" - ", 1)
         if not title or not link:
@@ -105,21 +116,88 @@ def _parse_rss(raw: bytes, kind: str) -> list[dict]:
     return items
 
 
+def _unwrap_news_url(link: str) -> str:
+    """Bing/Google 리다이렉트 URL이면 실제 기사 URL을 꺼낸다."""
+    link = (link or "").strip()
+    if not link:
+        return link
+    host = urlparse(link).netloc.lower()
+    if "bing.com" in host and "apiclick" in link:
+        inner = (parse_qs(urlparse(link).query).get("url") or [""])[0]
+        if inner:
+            return unquote(inner)
+    return link
+
+
+_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; EduFlow/1.0)",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
+
+
+def _shorten_query(query: str, max_chars: int = 60) -> str:
+    """긴 문장을 Google News RSS에 적합한 짧은 키워드로 축약한다."""
+    query = re.sub(r"\(출처[^)]*\)", "", query).strip()
+    query = re.sub(r"\[기사\d+\]", "", query).strip()
+    query = re.sub(r"['\"""''`]", "", query)
+    query = re.sub(r"\s+", " ", query).strip()
+    if len(query) <= max_chars:
+        return query
+    words = query.split()
+    result: list[str] = []
+    length = 0
+    for w in words:
+        if length + len(w) + 1 > max_chars:
+            break
+        result.append(w)
+        length += len(w) + 1
+    return " ".join(result) if result else query[:max_chars]
+
+
 async def google_news(query: str, kind: str = "뉴스", limit: int = 6) -> list[dict]:
+    global _google_news_blocked_until
+    if time.monotonic() < _google_news_blocked_until:
+        return []
+    query = _shorten_query(query)
     url = (
         "https://news.google.com/rss/search"
         f"?q={quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
     )
     async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-        response = await client.get(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; EduFlow/1.0)",
-                "Accept": "application/rss+xml, application/xml, text/xml, */*",
-            },
-        )
+        response = await client.get(url, headers=_HTTP_HEADERS)
+        if response.status_code == 503:
+            _google_news_blocked_until = time.monotonic() + 300
+            logger.warning("Google News 503 — 5분간 검색 중단")
+            return []
         response.raise_for_status()
         return _parse_rss(response.content, kind)[:limit]
+
+
+async def bing_news(query: str, kind: str = "뉴스", limit: int = 6) -> list[dict]:
+    query = _shorten_query(query)
+    url = f"https://www.bing.com/news/search?q={quote(query)}&format=rss"
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        response = await client.get(url, headers=_HTTP_HEADERS)
+        response.raise_for_status()
+        return filter_real_articles(_parse_rss(response.content, kind))[:limit]
+
+
+async def search_news(query: str, kind: str = "뉴스", limit: int = 6) -> list[dict]:
+    """Google News를 우선 쓰고, 막히면 Bing News로 실제 기사를 가져온다."""
+    try:
+        articles = filter_real_articles(await google_news(query, kind=kind, limit=limit))
+        if articles:
+            return articles
+    except httpx.HTTPError as exc:
+        logger.warning("Google News failed for %s: %s", query, exc)
+    try:
+        articles = await bing_news(query, kind=kind, limit=limit)
+        if articles:
+            logger.info("Bing News fallback used for %s (%s articles)", query, len(articles))
+        return articles
+    except httpx.HTTPError as exc:
+        logger.warning("Bing News failed for %s: %s", query, exc)
+        return []
 
 
 def _law_extras(blob: str) -> list[dict]:
@@ -153,7 +231,7 @@ async def fetch_topic_articles(topic: str, *, limit: int = 12) -> list[dict]:
     articles: list[dict] = []
     for query, kind in queries:
         try:
-            batch = filter_real_articles(await google_news(query, kind=kind, limit=5))
+            batch = await search_news(query, kind=kind, limit=5)
             articles.extend(_dedupe_articles(batch, seen))
         except httpx.HTTPError as exc:
             logger.warning("stage3 topic news fetch failed for %s: %s", query, exc)
@@ -307,17 +385,17 @@ async def fetch_turn_sources(
     topic = (topic or "").strip()
     queries: list[tuple[str, str]] = []
     if len(claim) >= 8:
-        queries.append((claim[:120], "기사"))
+        queries.append((claim[:60], "기사"))
         if topic:
-            queries.append((f"{claim[:72]} {topic[:36]}", "뉴스"))
+            queries.append((f"{topic[:30]} {claim[:30]}", "뉴스"))
     elif len(text) >= 10:
-        queries.append((text[:120], "기사"))
+        queries.append((text[:60], "기사"))
 
     seen: set[str] = set()
     articles: list[dict] = []
     for query, kind in queries:
         try:
-            batch = _dedupe_articles(await google_news(query, kind=kind, limit=3), seen)
+            batch = _dedupe_articles(await search_news(query, kind=kind, limit=3), seen)
             articles.extend(batch)
         except httpx.HTTPError as exc:
             logger.warning("stage3 turn source search failed for %s: %s", query, exc)

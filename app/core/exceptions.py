@@ -382,6 +382,15 @@ class Stage3LangflowServiceUnavailableError(DomainException):
     )
 
 
+class Stage3NewsUnavailableError(DomainException):
+    """토론 근거용 실제 뉴스를 수집하지 못했을 때 (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_message = (
+        "토론 근거에 쓸 뉴스를 찾지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+
+
 class Stage3AccessForbiddenError(DomainException):
     """3단계 과제 API를 role·학급 권한이 없는 계정으로 접근할 때 발생 (403)."""
 

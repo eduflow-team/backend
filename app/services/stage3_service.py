@@ -23,6 +23,7 @@ from app.core.exceptions import (
     Stage3AccessForbiddenError,
     Stage3AlreadySubmittedError,
     Stage3DebateNotStartedError,
+    Stage3NewsUnavailableError,
     Stage3SubmitLimitExceededError,
     Stage3TurnNotFoundError,
 )
@@ -715,6 +716,9 @@ class Stage3Service:
         question: str | None = None,
     ) -> dict:
         topic_articles = await fetch_topic_articles(detail.topic)
+        topic_articles = filter_real_articles(topic_articles)
+        if not topic_articles:
+            raise Stage3NewsUnavailableError()
         news_brief = format_news_brief(topic_articles)
         langflow_result = await self.langflow_client.run_debate(
             topic=detail.topic,

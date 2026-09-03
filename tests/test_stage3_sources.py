@@ -2,6 +2,7 @@ import pytest
 
 from app.services.stage3_sources import (
     _dedupe_articles,
+    _unwrap_news_url,
     debate_has_stored_sources,
     filter_real_articles,
     find_turn_sources,
@@ -194,3 +195,33 @@ def test_sources_for_claim_text_overlap() -> None:
     linked = sources_for_claim_text("로봇세 도입이 일자리 보호에 도움이 된다.", pool)
     assert len(linked) == 1
     assert linked[0]["title"] == "로봇세 도입 논의"
+
+
+def test_unwrap_bing_apiclick_url() -> None:
+    wrapped = (
+        "http://www.bing.com/news/apiclick.aspx?ref=FexRss"
+        "&url=https%3A%2F%2Fwww.hankyung.com%2Farticle%2F123"
+    )
+    assert _unwrap_news_url(wrapped) == "https://www.hankyung.com/article/123"
+
+
+def test_filter_rejects_unwrapped_bing_click() -> None:
+    items = [
+        {
+            "title": "AI 교육 보도",
+            "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss",
+            "source": "Bing",
+            "published": "",
+            "kind": "기사",
+        },
+        {
+            "title": "AI 교육 보도",
+            "url": "https://www.hankyung.com/article/123",
+            "source": "한경",
+            "published": "",
+            "kind": "기사",
+        },
+    ]
+    found = filter_real_articles(items)
+    assert len(found) == 1
+    assert found[0]["url"] == "https://www.hankyung.com/article/123"
