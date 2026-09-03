@@ -70,6 +70,7 @@ from app.services.stage3_debate import (
     public_turns,
     resolve_checked_turn_ids,
 )
+from app.services.stage3_demo import build_demo_payload, is_demo_topic
 from app.services.stage3_geval_service import grade_stage3_corrections
 from app.services.stage3_sources import (
     attach_turn_sources,
@@ -166,6 +167,23 @@ class Stage3Service:
         self, user_id: int, assignment_id: int
     ) -> Stage3TeacherPreviewResponse:
         assignment, detail = await self._get_stage3_assignment_for_teacher(user_id, assignment_id)
+
+        if is_demo_topic(detail.topic):
+            debate_payload = build_demo_payload(
+                topic=detail.topic,
+                pro_persona=detail.pro_persona,
+                con_persona=detail.con_persona,
+                mode=detail.debate_mode or "v2",
+            )
+            detail.preview_debate_payload = debate_payload
+            await self.stage3_detail_repository.update(detail)
+            await self.session.commit()
+            return Stage3TeacherPreviewResponse(
+                assignment_id=assignment_id,
+                reused=False,
+                debate=self._to_public_debate(debate_payload, set(), reveal_all=True),
+                elapsed=debate_payload.get("elapsed"),
+            )
 
         if detail.preview_debate_payload:
             payload = detail.preview_debate_payload
@@ -344,7 +362,17 @@ class Stage3Service:
             raise Stage3SubmitLimitExceededError()
 
         question = (payload.question if payload else None) or detail.question
-        if detail.preview_debate_payload:
+        if is_demo_topic(detail.topic):
+            debate_payload = build_demo_payload(
+                topic=detail.topic,
+                pro_persona=detail.pro_persona,
+                con_persona=detail.con_persona,
+                question=question,
+                mode=detail.debate_mode or "v2",
+            )
+            detail.preview_debate_payload = debate_payload
+            await self.stage3_detail_repository.update(detail)
+        elif detail.preview_debate_payload:
             debate_payload = detail.preview_debate_payload
             if not debate_has_stored_sources(debate_payload):
                 await attach_turn_sources(debate_payload, detail.topic, force=True)
@@ -715,6 +743,14 @@ class Stage3Service:
         *,
         question: str | None = None,
     ) -> dict:
+        if is_demo_topic(detail.topic):
+            return build_demo_payload(
+                topic=detail.topic,
+                pro_persona=detail.pro_persona,
+                con_persona=detail.con_persona,
+                question=question,
+                mode=detail.debate_mode or "v2",
+            )
         topic_articles = await fetch_topic_articles(detail.topic)
         topic_articles = filter_real_articles(topic_articles)
         if not topic_articles:
